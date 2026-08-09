@@ -1,0 +1,27 @@
+# Agentic Drop Zone (ADZ) Configuration Blueprint
+# This YAML configures the reactive directories, patterns, and commands
+# executed by the background watcher script.
+
+global_settings:
+  archive_dir: "./archive"
+  outbox_dir: "./outbox"
+  log_file: "./adz_watcher.log"
+
+drop_zones:
+  - name: "echo_zone"
+    directory: "./inbox/echo"
+    patterns: ["*.txt", "*.md"]
+    command: "python3 -c \"import sys; print('=== ECHO AGENT REACTIVE OUTBOX ===\\nProcessed File: {file_name}\\nContent:\\n' + open('{file_path}').read())\""
+    color: "green"
+
+  - name: "finance_categorizer"
+    directory: "./inbox/finance"
+    patterns: ["*.csv"]
+    command: "python3 -c \"print('=== FINANCE AGENT REACTIVE OUTBOX ===\\nAnalyzing CSV transaction file: {file_name}\\nCategorizing expenditures and exporting viz chart...')\""
+    color: "magenta"
+
+  - name: "morning_debrief"
+    directory: "./inbox/debrief"
+    patterns: ["*.txt", "*.mp3", "*.wav"]
+    command: "python3 -c \"print('=== MORNING DEBRIEF REACTIVE OUTBOX ===\\nProcessing transcription of: {file_name}\\nGenerating prioritized task list and leading question briefing...')\""
+    color: "cyan"

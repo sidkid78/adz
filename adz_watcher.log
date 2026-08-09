@@ -1,0 +1,3 @@
+2026-08-07 13:57:15,714 [INFO] Initializing Agentic Drop Zones Watcher...
+2026-08-07 13:57:15,715 [INFO] Drop Zone Active: 'echo_zone' -> Watching inbox\echo for ['*.txt', '*.md']
+2026-08-07 13:57:15,716 [INFO] Drop Zone Active: 'finance_categorizer' -> Watching inbox\finance for ['*.csv']

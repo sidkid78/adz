@@ -1,0 +1,12 @@
+[project]
+name = "test"
+version = "0.1.0"
+description = "Add your description here"
+requires-python = ">=3.12"
+dependencies = [
+    "e2b>=2.37.1",
+    "google-genai>=2.17.0",
+    "mypy>=2.3.0",
+    "pytest>=9.1.1",
+    "ruff>=0.16.2",
+]
