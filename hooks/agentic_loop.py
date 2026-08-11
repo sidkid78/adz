@@ -10,7 +10,7 @@ import os
 import subprocess
 from google import genai
 
-from hook_bus import HookBus, HookContext, HookEvent
+from .hook_bus import HookBus, HookContext, HookEvent
 
 WRITE_FILE_TOOL = {
     "type": "function",

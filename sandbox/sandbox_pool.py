@@ -16,18 +16,19 @@ from dataclasses import dataclass
 
 from e2b import Sandbox
 
-REPO_URL = "https://github.com/your-org/your-repo.git"
+REPO_URL = "https://github.com/sidkid78/adz.git"
 BASE_BRANCH = "main"
 SETUP_COMMANDS = [
-    "pip install -r requirements.txt -q",
-    # add whatever system deps your repo needs here
+    "pip install uv -q",
+    "python -m uv sync",
+    "python -m uv pip install --system pytest",
 ]
 
 
 @dataclass
 class WarmSandbox:
     sbx: Sandbox
-    repo_path: str = "/workspace/repo"
+    repo_path: str = "/home/user/workspace/repo"
 
 
 class SandboxPool:
@@ -39,9 +40,9 @@ class SandboxPool:
 
     def _provision_one(self) -> WarmSandbox:
         sbx = Sandbox.create(timeout=self.sandbox_timeout)
-        sbx.commands.run(f"git clone -b {BASE_BRANCH} {REPO_URL} /workspace/repo")
+        sbx.commands.run(f"git clone -b {BASE_BRANCH} {REPO_URL} /home/user/workspace/repo")
         for cmd in SETUP_COMMANDS:
-            sbx.commands.run(cmd, cwd="/workspace/repo")
+            sbx.commands.run(cmd, cwd="/home/user/workspace/repo")
         return WarmSandbox(sbx=sbx)
 
     def _fill(self, n: int) -> None:

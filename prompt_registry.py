@@ -2,7 +2,7 @@
 prompt_registry.py — The Prompt Registry
 
 A centralized, file-backed store of reusable prompt templates, mirroring
-the .claude/commands/ slash-command pattern. Each template is a markdown
+the .gemini/commands/ slash-command pattern. Each template is a markdown
 file with optional YAML front matter (metadata + an optional system
 instruction override) and {{variable}} placeholders in the body.
 

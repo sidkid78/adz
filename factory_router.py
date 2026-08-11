@@ -26,10 +26,13 @@ from pathlib import Path
 from google import genai
 from e2b import Sandbox
 
+import sys
+sys.path.insert(0, str(Path(__file__).parent))
+
 from gemini_build_agent import GeminiBuildAgent
 
-CHECK_SCRIPT = Path("check.sh").read_text()
-TEST_CODE = Path("test_target_code.py").read_text()
+CHECK_SCRIPT = (Path(__file__).parent / "check.sh").read_text()
+TEST_CODE = (Path(__file__).parent / "test_target_code.py").read_text()
 
 
 class TicketType(str, Enum):

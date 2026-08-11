@@ -2,15 +2,15 @@
 hooks_demo.py — two scenarios proving the hook bus actually does something
 """
 
-from hook_bus import HookBus, HookEvent
-from hooks_library import (
+from .hook_bus import HookBus, HookEvent
+from .hooks_library import (
     block_destructive_commands,
     run_tests_after_python_edit,
     log_notification,
     log_stop,
     log_subagent_stop,
 )
-from agentic_loop import HookedAgent
+from .agentic_loop import HookedAgent
 
 bus = HookBus()
 bus.register(HookEvent.PRE_TOOL_USE, block_destructive_commands)

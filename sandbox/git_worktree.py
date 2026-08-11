@@ -21,8 +21,8 @@ class Worktree:
 
 
 def create_worktree(sbx: Sandbox, repo_path: str, branch: str) -> Worktree:
-    worktree_path = f"/workspace/worktrees/{branch}"
-    sbx.commands.run("mkdir -p /workspace/worktrees")
+    worktree_path = f"/home/user/workspace/worktrees/{branch}"
+    sbx.commands.run("mkdir -p /home/user/workspace/worktrees")
 
     # -b creates the branch fresh off the repo's current HEAD.
     result = sbx.commands.run(f"git worktree add -b {branch} {worktree_path}", cwd=repo_path)

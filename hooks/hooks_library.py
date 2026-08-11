@@ -10,7 +10,7 @@ HookContext, no model required.
 import re
 import subprocess
 
-from hook_bus import HookContext, HookDecision
+from .hook_bus import HookContext, HookDecision
 
 # ---- PRE_TOOL_USE: the firewall --------------------------------------
 DESTRUCTIVE_PATTERNS = [
@@ -52,6 +52,24 @@ def run_tests_after_python_edit(ctx: HookContext) -> HookDecision | None:
                       f"Fix the file and write it again."
         )
     return None
+
+
+# ---- SETUP: heavy one-time-per-session prep --------------------------
+def make_setup_hook(sbx, repo_path: str, commands: list[str]):
+    """Fired once via HookEvent.SETUP, never per-turn — the distinction
+    the blueprint draws between this and the pool's baseline install:
+    the pool's SETUP_COMMANDS are fixed per-sandbox (deps every task
+    needs), this hook is per-SESSION (e.g. migrations only a
+    database-touching ticket needs)."""
+
+    def hook(ctx: HookContext) -> HookDecision | None:
+        for cmd in commands:
+            result = sbx.commands.run(cmd, cwd=repo_path)
+            if result.exit_code != 0:
+                return HookDecision(feedback=f"Setup command failed: {cmd!r}\n{result.stderr}")
+        return None
+
+    return hook
 
 
 # ---- NOTIFICATION / STOP / SUBAGENT_STOP: logging, cost, TTS-ready ----

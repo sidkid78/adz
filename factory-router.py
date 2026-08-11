@@ -103,7 +103,7 @@ def execute_agentic_sandbox_workflow(issue_data: Dict[str, Any]):
         sandbox.run(f"cd /workspace/src && git checkout -b {branch_name}")
         
         # Create standard layout directories
-        sandbox.run("mkdir -p /workspace/specs /workspace/ai_docs /workspace/.claude/commands")
+        sandbox.run("mkdir -p /workspace/specs /workspace/ai_docs /workspace/.gemini/commands")
         
         # 3. Inject Task Spec
         # Creating a Markdown spec so the agent understands goals, rules, and exit criteria

@@ -10,8 +10,8 @@ import os
 from google import genai
 from e2b import Sandbox
 
-from test.hooks.hook_bus import HookBus, HookContext, HookEvent
-from test.hooks.agentic_loop import TOOLS
+from hooks.hook_bus import HookBus, HookContext, HookEvent
+from hooks.agentic_loop import TOOLS
 
 
 def _execute_tool_in_sandbox(sbx: Sandbox, cwd: str, name: str, args: dict) -> dict:

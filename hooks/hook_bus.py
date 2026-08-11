@@ -22,6 +22,7 @@ from typing import Callable
 
 
 class HookEvent(str, Enum):
+    SETUP = "setup"
     PRE_TOOL_USE = "pre_tool_use"
     POST_TOOL_USE = "post_tool_use"
     NOTIFICATION = "notification"

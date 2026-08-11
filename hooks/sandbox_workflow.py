@@ -34,10 +34,10 @@ def setup_sandbox_layout(sbx: Sandbox, ticket: dict, base_branch: str) -> None:
     """Clones the repo and creates the standardized directory layout
     from the architecture doc: .claude/, ai_docs/, specs/, src/"""
     for d in [
-        "/workspace/.claude/commands",
-        "/workspace/.claude/hooks",
-        "/workspace/ai_docs",
-        "/workspace/specs",
+        "/home/user/workspace/.gemini/commands",
+        "/home/user/workspace/.gemini/hooks",
+        "/home/user/workspace/ai_docs",
+        "/home/user/workspace/specs",
     ]:
         sbx.commands.run(f"mkdir -p {d}")
 
@@ -47,24 +47,24 @@ def setup_sandbox_layout(sbx: Sandbox, ticket: dict, base_branch: str) -> None:
     clone_url = ticket["clone_url"].replace(
         "https://", f"https://x-access-token:{GITHUB_TOKEN}@"
     )
-    sbx.commands.run(f"git clone -b {base_branch} {clone_url} /workspace/src")
-    sbx.files.write("/workspace/specs/issue-spec.md", build_spec_file(ticket))
+    sbx.commands.run(f"git clone -b {base_branch} {clone_url} /home/user/workspace/src")
+    sbx.files.write("/home/user/workspace/specs/issue-spec.md", build_spec_file(ticket))
 
 
 def run_closed_loop(sbx: Sandbox, build_model: str, max_retries: int) -> bool:
     """Doc Steps 2-6: agent reads the spec, writes code, a deterministic
     post-tool hook (pytest) validates, failures route back to the agent,
     repeat until pass or out of retries."""
-    spec = sbx.files.read("/workspace/specs/issue-spec.md")
+    spec = sbx.files.read("/home/user/workspace/specs/issue-spec.md")
     agent = GeminiBuildAgent(model=build_model)
     code = agent.write_code(spec)
 
     for attempt in range(1, max_retries + 1):
-        sbx.files.write("/workspace/src/target_code.py", code)
+        sbx.files.write("/home/user/workspace/src/target_code.py", code)
 
         # The "post-tool hook" from the doc: deterministic, same result
         # regardless of which model/agent produced the code.
-        result = sbx.commands.run("pytest tests/ -v", cwd="/workspace/src")
+        result = sbx.commands.run("pytest tests/ -v", cwd="/home/user/workspace/src")
 
         if result.exit_code == 0:
             print(f"Closed loop passed on attempt {attempt}")
@@ -78,13 +78,13 @@ def run_closed_loop(sbx: Sandbox, build_model: str, max_retries: int) -> bool:
 
 def commit_and_push(sbx: Sandbox, branch: str, ticket: dict) -> None:
     sbx.commands.run(
-        f"git -C /workspace/src checkout -b {branch} || git -C /workspace/src checkout {branch}"
+        f"git -C /home/user/workspace/src checkout -b {branch} || git -C /home/user/workspace/src checkout {branch}"
     )
-    sbx.commands.run("git -C /workspace/src add -A")
+    sbx.commands.run("git -C /home/user/workspace/src add -A")
     sbx.commands.run(
-        f'git -C /workspace/src commit -m "Resolve #{ticket["issue_number"]}: {ticket["title"]}"'
+        f'git -C /home/user/workspace/src commit -m "Resolve #{ticket["issue_number"]}: {ticket["title"]}"'
     )
-    sbx.commands.run(f"git -C /workspace/src push origin {branch}")
+    sbx.commands.run(f"git -C /home/user/workspace/src push origin {branch}")
 
 
 def create_pull_request(ticket: dict, branch: str, base: str = "main") -> str:
