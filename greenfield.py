@@ -64,6 +64,13 @@ PACKAGE_JSON = {
     "private": True,
     "type": "module",
     "scripts": {
+        # The obvious ones. The scaffold used to ship only gate scripts,
+        # so a finished project had no way to run — `npm run dev` failed
+        # and you had to know to type `npx next dev`. A factory that
+        # produces an app nobody can start has not finished the job.
+        "dev": "next dev",
+        "build": "next build",
+        "start": "next start",
         "typecheck": "tsc -p tsconfig.check.json --noEmit",
         "test": "vitest run --passWithNoTests",
         # Next 16 generates .next/types/validator.ts but does not
