@@ -405,6 +405,15 @@ def main() -> int:
         if integration.passed:
             break
         print(f"\n--- integration round {round_no}: FAILED at {integration.failed} ---")
+        # Never repair code for an environment failure. A transient 502
+        # from the local Supabase stack once blamed four tickets, purely
+        # because the CLI's output happened to mention their file paths —
+        # queueing rewrites of code that was already correct.
+        if integration.infra:
+            print("    INFRASTRUCTURE failure — not attributable to any ticket.")
+            print(f"    {integration.failed} failed after its retries; the code is unchanged.")
+            print("    Re-run the integration gate once the environment is healthy.")
+            break
         blamed = blame_tickets(integration.transcript, owners)
         if not blamed:
             print("    no ticket owns a file named in the failure — cannot auto-repair")

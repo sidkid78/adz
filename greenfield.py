@@ -599,6 +599,10 @@ class Step:
     cmd: "list[str] | Callable[[TargetRepo], list[str]]"
     precheck: "Callable[[TargetRepo], tuple[bool, str]]"
     timeout: int = 900
+    # Retries are for steps whose failures are sometimes the environment
+    # rather than the code. Only ever set it where that is actually true;
+    # retrying a real gate failure just hides it.
+    retries: int = 0
 
     def resolve(self, repo: "TargetRepo") -> list[str]:
         """Static commands pass through; callables are given the repo.
@@ -648,8 +652,33 @@ INTEGRATION_STEPS = [
     # built actually reachable from an entry point. pm-mcp-server passed
     # every other gate and shipped a server with zero tools registered.
     Step("reachability", REACHABILITY, _has_entry_points, timeout=120),
-    Step("supabase db reset", DB_RESET, _supabase_available, timeout=900),
+    # The local stack restarts its containers at the end of a reset, and
+    # the storage container is sometimes not listening yet when the CLI
+    # probes it. The migration has already applied by then.
+    Step("supabase db reset", DB_RESET, _supabase_available, timeout=900, retries=2),
 ]
+
+
+# A gate failure means "the code is wrong". These say "the machine was
+# busy" — a container still booting, a port in use, a socket refused.
+# Treating them as code failures made a transient 502 blame four tickets
+# and queue repairs against code that was already correct, which is worse
+# than not checking at all: it spends tokens to make good code different.
+INFRA_ERROR_PATTERNS = (
+    r"dial tcp", r"connection refused", r"actively refused",
+    r"failed to execute http request", r"Error status 5\d\d",
+    r"port is already allocated", r"failed to set up container networking",
+    r"TIMEOUT after \d+s", r"ECONNREFUSED", r"EADDRINUSE",
+    r"upstream server", r"docker daemon",
+    # Seen during "Initialising schema..." — the CLI's own container
+    # setup, before any migration runs, so it cannot be the SQL.
+    r"error running container", r"Conflict\. The container name",
+    r"already in use by container",
+)
+
+
+def is_infra_failure(text: str) -> bool:
+    return any(re.search(p, text, re.IGNORECASE) for p in INFRA_ERROR_PATTERNS)
 
 
 @dataclass
@@ -659,9 +688,12 @@ class IntegrationResult:
     skipped: list[tuple[str, str]]
     failed: str | None
     transcript: str
+    infra: bool = False
 
     def summary(self) -> str:
         parts = [f"{len(self.ran)} ran"]
+        if self.infra:
+            parts.append("INFRASTRUCTURE failure (not attributable to code)")
         if self.skipped:
             parts.append(f"{len(self.skipped)} SKIPPED (" +
                          "; ".join(f"{n}: {why}" for n, why in self.skipped) + ")")
@@ -706,6 +738,16 @@ def run_integration(repo: "TargetRepo", steps: list[Step] | None = None,
         transcript.append(f"== {step.name} ==")
         step_started = time.time()
         result = repo.run_gate([step.resolve(repo)], timeout=step.timeout)
+        # Retry ONLY on an infrastructure failure. A real gate failure is
+        # reported the first time: retrying that would just take longer to
+        # deliver the same verdict, and could mask a genuine flake in the
+        # code itself.
+        for attempt in range(step.retries):
+            if result.passed or not is_infra_failure(result.transcript):
+                break
+            transcript.append(f"-- infra failure, retry {attempt + 1}/{step.retries} --")
+            time.sleep(5)
+            result = repo.run_gate([step.resolve(repo)], timeout=step.timeout)
         elapsed = round(time.time() - step_started, 2)
         transcript.append(result.transcript[-6000:])
         ran.append(step.name)
@@ -713,7 +755,9 @@ def run_integration(repo: "TargetRepo", steps: list[Step] | None = None,
             log.integration_step(step.name, "pass" if result.passed else "fail",
                                  elapsed, "", "" if result.passed else result.transcript)
         if not result.passed:
-            return IntegrationResult(False, ran, skipped, step.name, "\n".join(transcript))
+            return IntegrationResult(False, ran, skipped, step.name,
+                                     "\n".join(transcript),
+                                     infra=is_infra_failure(result.transcript))
 
     return IntegrationResult(True, ran, skipped, None, "\n".join(transcript))
 

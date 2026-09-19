@@ -1,8 +1,10 @@
 role: full_stack_development
-total_runs: 1
-successes: 1
+total_runs: 2
+successes: 2
 failures: 0
 notes:
 - Ensure all crew-reply-parser Edge Function logic and database integrations are fully
   implemented and deployed.
-last_updated: '2026-09-19T21:50:49.422218+00:00'
+- Always include complete routing logic and database integration tests when implementing
+  backend webhook parsers.
+last_updated: '2026-09-19T23:00:39.573740+00:00'

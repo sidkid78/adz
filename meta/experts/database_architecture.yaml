@@ -1,8 +1,10 @@
 role: database_architecture
-total_runs: 1
-successes: 1
+total_runs: 2
+successes: 2
 failures: 0
 notes:
 - Always create complete, production-ready Supabase database migrations with proper
   tables, RLS policies, indexes, and foreign keys in the initial migration file.
-last_updated: '2026-09-19T21:41:32.161914+00:00'
+- Always commit Supabase schema designs directly to `supabase/migrations/0001_db_schema.sql`
+  for persistent tracking.
+last_updated: '2026-09-19T22:50:25.303844+00:00'
