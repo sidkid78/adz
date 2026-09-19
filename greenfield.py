@@ -87,7 +87,16 @@ PACKAGE_JSON = {
         "react-dom": "^19.3.0",
         "zod": "^3.25.76",
     },
+    # Tailwind is toolchain, so it belongs here: a ticket cannot add it
+    # (write_files refuses package.json), and the architectures reaching
+    # this factory assume it — the frontend expert role is literally
+    # "frontend_development_tailwind_next_js". Without it the generated
+    # components render as unstyled HTML with page-sized SVG icons, and
+    # no gate notices: tsc, vitest and next build are all perfectly happy
+    # with class names that resolve to nothing.
     "devDependencies": {
+        "@tailwindcss/postcss": "^4.3.3",
+        "tailwindcss": "^4.3.3",
         "@types/node": "^22.18.11",
         "@types/react": "^19.3.0",
         "@types/react-dom": "^19.3.0",
@@ -183,7 +192,19 @@ const nextConfig = {
 
 export default nextConfig;
 """,
+    "postcss.config.mjs": """\
+const config = {
+  plugins: { "@tailwindcss/postcss": {} },
+};
+
+export default config;
+""",
+    "src/app/globals.css": """\
+@import "tailwindcss";
+""",
     "src/app/layout.tsx": """\
+import './globals.css';
+
 import type { ReactNode } from 'react';
 
 export const metadata = {
