@@ -35,6 +35,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -535,6 +536,9 @@ TEST = ["npm", "run", "--silent", "test"]
 NEXT_BUILD = ["npx", "next", "build"]
 ROUTE_TYPEGEN = ["npm", "run", "--silent", "typegen"]
 ROUTE_CONTRACTS = ["npm", "run", "--silent", "check:routes"]
+# Our own check, run as a subprocess so it reports through the same
+# GateResult path as every other step rather than needing a special case.
+REACHABILITY = [sys.executable, str(REPO_ROOT / "reachability.py"), "."]
 DB_RESET = ["supabase", "db", "reset"]
 
 # Per-ticket: seconds, so it can run on every repair attempt.
@@ -565,6 +569,14 @@ def edge_function_files(repo: "TargetRepo") -> list[str]:
 
 def deno_check_cmd(files: list[str]) -> list[str]:
     return ["deno", "check", *files]
+
+
+def _has_entry_points(repo: "TargetRepo") -> tuple[bool, str]:
+    from reachability import entry_points
+    entries = entry_points(repo.path)
+    if not entries:
+        return False, "no framework entry points to walk from"
+    return True, f"{len(entries)} entry point(s)"
 
 
 def _deno_available(repo: "TargetRepo") -> tuple[bool, str]:
@@ -632,6 +644,10 @@ INTEGRATION_STEPS = [
     Step("edge functions (deno)", lambda r: deno_check_cmd(edge_function_files(r)),
          _deno_available, timeout=600),
     Step("route contracts", ROUTE_CONTRACTS, _next_available, timeout=600),
+    # Asks the one question no compiler asks: is each file the factory
+    # built actually reachable from an entry point. pm-mcp-server passed
+    # every other gate and shipped a server with zero tools registered.
+    Step("reachability", REACHABILITY, _has_entry_points, timeout=120),
     Step("supabase db reset", DB_RESET, _supabase_available, timeout=900),
 ]
 

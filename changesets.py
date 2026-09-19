@@ -74,9 +74,18 @@ MIN_FENCE_CHARS = 120
 # conventional path derived from its output_format. db_schema is exactly
 # this case: 6KB of SQL under the heading "SQL Schema Implementation",
 # with no filename anywhere in the document.
+# Every fallback must land on a path the framework actually LOADS.
+# The first version wrote Next components to "src/app/<ticket>.tsx" and
+# CLI scripts to "src/<ticket>.ts" — both typecheck, neither is an entry
+# point, and the reachability gate correctly called all of them dead code.
+# A route needs page.tsx inside a directory; a standalone script needs a
+# conventional location that is declared an entry point.
 FORMAT_FALLBACK_PATHS = [
-    (("sql", "schema", "migration"), "supabase/migrations/{order:04d}_{ticket}.sql"),
-    (("component", "next.js", "route", "frontend"), "src/app/{ticket}.tsx"),
+    (("sql", "schema", "migration", "erd"), "supabase/migrations/{order:04d}_{ticket}.sql"),
+    (("edge function", "webhook", "serverless"), "supabase/functions/{ticket}/index.ts"),
+    (("cli", "script", "utility", "job", "cron"), "src/scripts/{ticket}.ts"),
+    (("component", "next.js", "route", "frontend", "dashboard", "ui", "page"),
+     "src/app/{ticket}/page.tsx"),
     (("typescript", "code", "logic", "tool", "algorithm"), "src/{ticket}.ts"),
 ]
 
