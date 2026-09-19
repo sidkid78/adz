@@ -11,7 +11,7 @@ directories:
   finance:
     inbox: "drops/inbox/finance"
     outbox: "drops/outbox/finance"
-    model: "gemini-3.6-flash"
+    model: "gemini-3.8-flash"
     prompt: |
       You are a precise finance categorizer. Process the input file,
       extract all expenses, and output a categorized ledger.

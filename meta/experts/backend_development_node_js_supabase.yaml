@@ -1,0 +1,8 @@
+role: backend_development_node_js_supabase
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Maintain consistent naming conventions for Supabase Edge Functions when implementing
+  Google Workspace integrations.
+last_updated: '2026-09-19T21:42:25.165754+00:00'

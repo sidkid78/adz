@@ -35,6 +35,7 @@ import os
 import re
 import shutil
 import subprocess
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -279,6 +280,11 @@ class TargetRepo:
             json.dumps(PACKAGE_JSON, indent=2), encoding="utf-8", newline="\n")
         (self.path / "tsconfig.json").write_text(
             json.dumps(TSCONFIG, indent=2), encoding="utf-8", newline="\n")
+        # The per-ticket gate runs `tsc -p tsconfig.check.json`, so this
+        # file is not optional — without it every gate fails with TS5058
+        # before a single ticket is built.
+        (self.path / "tsconfig.check.json").write_text(
+            json.dumps(TSCONFIG_CHECK, indent=2), encoding="utf-8", newline="\n")
         (self.path / "vitest.config.ts").write_text(VITEST_CONFIG, encoding="utf-8", newline="\n")
         (self.path / ".gitignore").write_text(GITIGNORE, encoding="utf-8", newline="\n")
         (self.path / "README.md").write_text(
@@ -485,22 +491,34 @@ class TargetRepo:
         _run(["supabase", "stop", "--project-id", self.name], self.path, timeout=300)
 
     # ---- the gate ----------------------------------------------------
-    def run_gate(self, commands: list[list[str]], timeout: int = 600) -> GateResult:
+    def run_gate(self, commands: list[list[str]], timeout: int = 600,
+                 log=None, ticket: str | None = None) -> GateResult:
         """Run the repo's own toolchain. Short-circuits on first failure
-        so the agent gets one clear error rather than a pile."""
+        so the agent gets one clear error rather than a pile.
+
+        `log` is an optional RunLog. Every command is timed and emitted,
+        which is what makes "why did this ticket take four minutes"
+        answerable afterwards rather than only while watching it."""
         transcript = []
         for cmd in commands:
             label = " ".join(cmd)
             transcript.append(f"== {label} ==")
+            started = time.time()
             try:
                 proc = _run(cmd, self.path, timeout=timeout)
             except subprocess.TimeoutExpired:
                 transcript.append(f"TIMEOUT after {timeout}s")
+                if log:
+                    log.gate(label, False, round(time.time() - started, 2), ticket,
+                             f"TIMEOUT after {timeout}s")
                 return GateResult(False, "\n".join(transcript), label)
             output = ((proc.stdout or "") + (proc.stderr or "")).strip()
             # tsc is verbose on success and terse on failure; keep the tail,
             # which is where the errors and the summary live.
             transcript.append(output[-6000:] if output else "(no output)")
+            if log:
+                log.gate(label, proc.returncode == 0, round(time.time() - started, 2),
+                         ticket, output)
             if proc.returncode != 0:
                 transcript.append(f"\nFAILED: {label} (exit {proc.returncode})")
                 return GateResult(False, "\n".join(transcript), label)
@@ -535,6 +553,28 @@ PER_TICKET_GATE = [TYPECHECK, TEST]
 INTEGRATION_GATE = [TYPECHECK, TEST]
 
 
+EDGE_FUNCTIONS_DIR = "supabase/functions"
+
+
+def edge_function_files(repo: "TargetRepo") -> list[str]:
+    root = repo.path / EDGE_FUNCTIONS_DIR
+    if not root.exists():
+        return []
+    return sorted(p.relative_to(repo.path).as_posix() for p in root.rglob("*.ts"))
+
+
+def deno_check_cmd(files: list[str]) -> list[str]:
+    return ["deno", "check", *files]
+
+
+def _deno_available(repo: "TargetRepo") -> tuple[bool, str]:
+    if not _have("deno"):
+        return False, "deno not on PATH"
+    if not edge_function_files(repo):
+        return False, "no supabase/functions/*.ts in this project"
+    return True, f"{len(edge_function_files(repo))} edge function file(s)"
+
+
 @dataclass
 class Step:
     """An integration step plus how to tell whether it can run at all.
@@ -544,9 +584,17 @@ class Step:
     it produces the word "PASS" while measuring nothing.
     """
     name: str
-    cmd: list[str]
+    cmd: "list[str] | Callable[[TargetRepo], list[str]]"
     precheck: "Callable[[TargetRepo], tuple[bool, str]]"
     timeout: int = 900
+
+    def resolve(self, repo: "TargetRepo") -> list[str]:
+        """Static commands pass through; callables are given the repo.
+
+        `deno check` takes explicit paths rather than a glob — the shell
+        that runs it will not expand one on Windows — so the edge-function
+        step has to look at the tree before it can name its command."""
+        return self.cmd(repo) if callable(self.cmd) else self.cmd
 
 
 def _have(binary: str) -> bool:
@@ -577,6 +625,12 @@ INTEGRATION_STEPS = [
     Step("tests", TEST, lambda r: (True, "always"), timeout=600),
     Step("next build", NEXT_BUILD, _next_available, timeout=900),
     Step("route typegen", ROUTE_TYPEGEN, _next_available, timeout=600),
+    # Supabase Edge Functions are Deno, not Node: they live outside
+    # tsconfig's `include` and `tsc` never sees them. Without this step a
+    # ticket whose whole deliverable is an edge function is gated only on
+    # "the file exists and isn't tiny".
+    Step("edge functions (deno)", lambda r: deno_check_cmd(edge_function_files(r)),
+         _deno_available, timeout=600),
     Step("route contracts", ROUTE_CONTRACTS, _next_available, timeout=600),
     Step("supabase db reset", DB_RESET, _supabase_available, timeout=900),
 ]
@@ -601,7 +655,7 @@ class IntegrationResult:
 
 
 def run_integration(repo: "TargetRepo", steps: list[Step] | None = None,
-                    start_supabase: bool = True) -> IntegrationResult:
+                    start_supabase: bool = True, log=None) -> IntegrationResult:
     """Run the integration steps, reporting skips as skips.
 
     `passed` means every step that COULD run did run and succeeded. It
@@ -618,6 +672,8 @@ def run_integration(repo: "TargetRepo", steps: list[Step] | None = None,
         if not ok:
             skipped.append((step.name, reason))
             transcript.append(f"== {step.name} == SKIPPED: {reason}")
+            if log:
+                log.integration_step(step.name, "skip", 0.0, reason)
             continue
 
         # The database stack has to be up before a reset can apply
@@ -627,12 +683,19 @@ def run_integration(repo: "TargetRepo", steps: list[Step] | None = None,
             transcript.append(f"== supabase start ==\n{started.transcript[-600:]}")
             if not started.passed:
                 skipped.append((step.name, "supabase start failed"))
+                if log:
+                    log.integration_step(step.name, "skip", 0.0, "supabase start failed")
                 continue
 
         transcript.append(f"== {step.name} ==")
-        result = repo.run_gate([step.cmd], timeout=step.timeout)
+        step_started = time.time()
+        result = repo.run_gate([step.resolve(repo)], timeout=step.timeout)
+        elapsed = round(time.time() - step_started, 2)
         transcript.append(result.transcript[-6000:])
         ran.append(step.name)
+        if log:
+            log.integration_step(step.name, "pass" if result.passed else "fail",
+                                 elapsed, "", "" if result.passed else result.transcript)
         if not result.passed:
             return IntegrationResult(False, ran, skipped, step.name, "\n".join(transcript))
 

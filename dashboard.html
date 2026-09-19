@@ -1,0 +1,373 @@
+<!DOCTYPE html>
+<html lang="en" data-palette="#2a78d6,#eb6834,#1baf7a">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Factory Run</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 16 16%27%3E%3Crect width=%2716%27 height=%2716%27 rx=%273%27 fill=%27%232a78d6%27/%3E%3C/svg%3E">
+<style>
+  /* Colours are roles, defined once, swapped in one place for dark.
+     Status steps are the fixed status palette and are never reused as
+     series colours. Every status also carries an icon and a word, so
+     state is never communicated by hue alone. */
+  :root {
+    color-scheme: light;
+    --plane:      #f9f9f7;
+    --surface:    #fcfcfb;
+    --ink:        #0b0b0b;
+    --ink-2:      #52514e;
+    --muted:      #898781;
+    --grid:       #e1e0d9;
+    --baseline:   #c3c2b7;
+    --ring:       rgba(11,11,11,0.10);
+    --good:       #0ca30c;
+    --warning:    #fab219;
+    --serious:    #ec835a;
+    --critical:   #d03b3b;
+    --accent:     #2a78d6;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --plane:    #0d0d0d;
+      --surface:  #1a1a19;
+      --ink:      #ffffff;
+      --ink-2:    #c3c2b7;
+      --muted:    #898781;
+      --grid:     #2c2c2a;
+      --baseline: #383835;
+      --ring:     rgba(255,255,255,0.10);
+      --accent:   #3987e5;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --plane: #0d0d0d; --surface: #1a1a19; --ink: #fff; --ink-2: #c3c2b7;
+    --grid: #2c2c2a; --baseline: #383835; --ring: rgba(255,255,255,0.10);
+    --accent: #3987e5;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--plane); color: var(--ink);
+    font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    padding: 24px 16px 64px;
+  }
+  .wrap { max-width: 1060px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.07em;
+       color: var(--muted); margin: 32px 0 12px; font-weight: 600; }
+  .sub { color: var(--ink-2); font-size: 13px; margin: 0; }
+  .card { background: var(--surface); border: 1px solid var(--ring);
+          border-radius: 10px; padding: 16px; }
+
+  /* Hero + stat tiles: a number whose job is a headline is not a chart. */
+  header { display: flex; justify-content: space-between; align-items: flex-start;
+           gap: 16px; flex-wrap: wrap; margin-bottom: 20px; }
+  .hero { font-size: 42px; font-weight: 650; letter-spacing: -0.02em; line-height: 1; }
+  .hero small { font-size: 16px; color: var(--muted); font-weight: 500; }
+  .tiles { display: grid; gap: 10px 18px;
+           grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); }
+  .tile .k { font-size: 11px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .tile .v { font-size: 24px; font-weight: 620; margin-top: 4px; letter-spacing: -0.01em; }
+
+  /* Status pill: icon + word + colour, in that order of importance. */
+  .pill { display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
+          font-weight: 600; padding: 2px 9px 2px 7px; border-radius: 999px;
+          border: 1px solid currentColor; white-space: nowrap; }
+  .s-good     { color: var(--good); }
+  .s-warning  { color: #8a6000; }
+  .s-serious  { color: #9c4a24; }
+  .s-critical { color: var(--critical); }
+  .s-idle     { color: var(--muted); }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) .s-warning { color: var(--warning); }
+    :root:not([data-theme="light"]) .s-serious { color: var(--serious); }
+  }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase;
+       letter-spacing: 0.06em; color: var(--muted); font-weight: 600;
+       padding: 0 10px 8px 0; border-bottom: 1px solid var(--grid); }
+  td { padding: 9px 10px 9px 0; border-bottom: 1px solid var(--grid);
+       vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  .mono { font-family: var(--mono); font-size: 12.5px; }
+  .dim { color: var(--muted); }
+
+  /* Duration bar: magnitude, anchored to a common baseline, rounded
+     data-end only. Thin mark, recessive track. */
+  .bar-track { background: var(--grid); border-radius: 3px; height: 6px;
+               width: 100%; min-width: 60px; overflow: hidden; }
+  .bar-fill { height: 100%; background: var(--accent);
+              border-radius: 0 3px 3px 0; }
+
+  /* Attempt strip: one cell per attempt, so "passed on 3" is visible
+     without reading a number. */
+  .attempts { display: inline-flex; gap: 2px; }
+  .att { width: 16px; height: 16px; border-radius: 3px; display: grid;
+         place-items: center; font-size: 10px; font-weight: 700;
+         border: 1px solid currentColor; }
+
+  .layer-tag { font-size: 11px; color: var(--muted); font-family: var(--mono); }
+  .feed { max-height: 300px; overflow-y: auto; font-family: var(--mono);
+          font-size: 12px; line-height: 1.75; }
+  .feed div { display: flex; gap: 10px; }
+  .feed .t { color: var(--muted); flex: 0 0 62px; text-align: right; }
+  .err { font-family: var(--mono); font-size: 12px; white-space: pre-wrap;
+         color: var(--ink-2); background: var(--plane); border-radius: 6px;
+         padding: 8px 10px; margin-top: 6px; max-height: 150px; overflow: auto; }
+  .empty { color: var(--muted); padding: 28px 0; text-align: center; }
+  .controls { display: flex; gap: 8px; align-items: center; }
+  button, select { font: inherit; font-size: 13px; padding: 5px 10px;
+    border-radius: 7px; border: 1px solid var(--ring);
+    background: var(--surface); color: var(--ink); cursor: pointer; }
+  details summary { cursor: pointer; color: var(--ink-2); font-size: 12.5px; }
+  @media (max-width: 640px) { .hide-sm { display: none; } body { padding: 16px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1 id="title">Factory Run</h1>
+      <p class="sub" id="subtitle">loading…</p>
+    </div>
+    <div class="controls">
+      <select id="runPick" title="Run"></select>
+      <button id="themeBtn" title="Toggle theme">◐</button>
+    </div>
+  </header>
+
+  <div class="card" style="display:flex;align-items:center;gap:28px;flex-wrap:wrap">
+    <div>
+      <div class="hero"><span id="heroBuilt">–</span><small id="heroOf"></small></div>
+      <div class="sub" style="margin-top:4px">tickets through the gate</div>
+    </div>
+    <div style="flex:1;min-width:260px">
+      <div class="tiles" id="tiles"></div>
+    </div>
+  </div>
+
+  <h2>Tickets</h2>
+  <div class="card"><div id="ticketsBox"><div class="empty">waiting for events…</div></div></div>
+
+  <h2>Integration gate</h2>
+  <div class="card"><div id="integrationBox"><div class="empty">not reached yet</div></div></div>
+
+  <h2>Activity</h2>
+  <div class="card"><div class="feed" id="feed"></div></div>
+</div>
+
+<script>
+const RUNS = 'factory_runs';
+const $ = id => document.getElementById(id);
+let currentRun = null, timer = null;
+
+// --- status vocabulary: icon + word travel with every colour ----------
+const STATUS = {
+  good:     {cls:'s-good',     icon:'●', word:'passed'},
+  building: {cls:'s-warning',  icon:'◐', word:'building'},
+  repaired: {cls:'s-serious',  icon:'◈', word:'repaired'},
+  critical: {cls:'s-critical', icon:'✕', word:'failed'},
+  idle:     {cls:'s-idle',     icon:'○', word:'queued'},
+  skipped:  {cls:'s-idle',     icon:'⊘', word:'skipped'},
+};
+const pill = (k, label) => {
+  const s = STATUS[k] || STATUS.idle;
+  return `<span class="pill ${s.cls}"><span aria-hidden="true">${s.icon}</span>${label || s.word}</span>`;
+};
+const esc = s => String(s ?? '').replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+const secs = n => n == null ? '' : (n >= 60 ? `${Math.floor(n/60)}m ${Math.round(n%60)}s` : `${n.toFixed(1)}s`);
+
+async function listRuns() {
+  try {
+    const r = await fetch(`${RUNS}/latest.txt`, {cache:'no-store'});
+    if (r.ok) return [(await r.text()).trim()];
+  } catch (e) { /* directory listing fallback below */ }
+  return [];
+}
+
+async function loadEvents(run) {
+  const r = await fetch(`${RUNS}/${run}/events.jsonl`, {cache:'no-store'});
+  if (!r.ok) return [];
+  return (await r.text()).split('\n').filter(Boolean).map(l => {
+    try { return JSON.parse(l); } catch { return null; }   // torn final write
+  }).filter(Boolean);
+}
+
+function reduce(events) {
+  const st = {
+    arch:null, repo:null, layers:[], tickets:new Map(), order:[],
+    integration:[], repairs:[], feed:[], done:false, ok:null,
+    elapsed:0, gates:0, summary:''
+  };
+  for (const e of events) {
+    st.elapsed = Math.max(st.elapsed, e.elapsed || 0);
+    switch (e.kind) {
+      case 'run_start':
+        st.arch = e.architecture; st.repo = e.repo; st.layers = e.layers || [];
+        (e.tickets||[]).forEach(t => {
+          st.tickets.set(t.id, {...t, status:'idle', attempts:[], files:[], duration:null});
+          st.order.push(t.id);
+        });
+        break;
+      case 'ticket_start': {
+        const t = st.tickets.get(e.ticket); if (!t) break;
+        Object.assign(t, {status:'building', model:e.model, files:e.files||[],
+                          layer:e.layer, maxAttempts:e.max_attempts, expert:e.expert});
+        break;
+      }
+      case 'attempt_end': {
+        const t = st.tickets.get(e.ticket); if (!t) break;
+        t.attempts.push({n:e.attempt, outcome:e.outcome, stage:e.stage, detail:e.detail});
+        break;
+      }
+      case 'ticket_end': {
+        const t = st.tickets.get(e.ticket); if (!t) break;
+        t.status = e.ok ? 'good' : 'critical';
+        t.duration = e.duration; t.detail = e.detail;
+        break;
+      }
+      case 'gate': st.gates++; break;
+      case 'integration_step':
+        st.integration.push({name:e.name, status:e.status, duration:e.duration,
+                             reason:e.reason, tail:e.tail});
+        break;
+      case 'repair': {
+        st.repairs.push(e);
+        const t = st.tickets.get(e.ticket);
+        if (t && e.ok) t.status = 'repaired';
+        break;
+      }
+      case 'run_end':
+        st.done = true; st.ok = e.integration_passed;
+        st.built = e.built||[]; st.failed = e.failed||[];
+        st.summary = e.integration_summary || '';
+        break;
+    }
+    st.feed.push(e);
+  }
+  return st;
+}
+
+function renderTiles(st) {
+  const attempts = [...st.tickets.values()].reduce((a,t)=>a+t.attempts.length,0);
+  const files = [...st.tickets.values()].filter(t=>t.status!=='idle')
+                  .reduce((a,t)=>a+(t.files?.length||0),0);
+  const tiles = [
+    ['elapsed', secs(st.elapsed)],
+    ['attempts', attempts],
+    ['gate runs', st.gates],
+    ['files', files],
+    ['repairs', st.repairs.filter(r=>r.ok).length],
+  ];
+  $('tiles').innerHTML = tiles.map(([k,v]) =>
+    `<div class="tile"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+}
+
+function renderTickets(st) {
+  if (!st.order.length) return;
+  const maxDur = Math.max(1, ...[...st.tickets.values()].map(t=>t.duration||0));
+  const rows = st.order.map(id => {
+    const t = st.tickets.get(id);
+    const att = t.attempts.map(a => {
+      const cls = a.outcome === 'pass' ? 's-good'
+                : a.outcome === 'contract_fail' ? 's-serious' : 's-warning';
+      const tip = `attempt ${a.n}: ${a.outcome}${a.stage ? ' — '+a.stage : ''}`;
+      return `<span class="att ${cls}" title="${esc(tip)}">${a.n}</span>`;
+    }).join('');
+    const w = t.duration ? Math.max(3, (t.duration/maxDur)*100) : 0;
+    return `<tr>
+      <td><span class="layer-tag">L${t.layer ?? '–'}</span></td>
+      <td><div class="mono">${esc(id)}</div>
+          <div class="dim" style="font-size:12px">${esc(t.complexity||'')} ·
+          ${t.files?.length||0} files</div></td>
+      <td>${pill(t.status)}</td>
+      <td><span class="attempts">${att}</span></td>
+      <td class="hide-sm" style="width:26%">
+        ${t.duration ? `<div class="bar-track"><div class="bar-fill" style="width:${w}%"></div></div>
+        <div class="dim" style="font-size:11px;margin-top:3px">${secs(t.duration)}</div>` : ''}</td>
+    </tr>`;
+  }).join('');
+  $('ticketsBox').innerHTML = `<table>
+    <thead><tr><th></th><th>Ticket</th><th>Status</th><th>Attempts</th>
+    <th class="hide-sm">Duration</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
+function renderIntegration(st) {
+  if (!st.integration.length) return;
+  $('integrationBox').innerHTML = st.integration.map(s => {
+    const k = s.status === 'pass' ? 'good' : s.status === 'skip' ? 'skipped' : 'critical';
+    const label = s.status === 'pass' ? 'passed' : s.status === 'skip' ? 'skipped' : 'failed';
+    return `<div style="padding:9px 0;border-bottom:1px solid var(--grid)">
+      <div style="display:flex;gap:12px;align-items:center;justify-content:space-between">
+        <span class="mono">${esc(s.name)}</span>
+        <span style="display:flex;gap:10px;align-items:center">
+          <span class="dim" style="font-size:12px">${secs(s.duration)}</span>
+          ${pill(k, label)}</span></div>
+      ${s.reason ? `<div class="dim" style="font-size:12px;margin-top:4px">${esc(s.reason)}</div>` : ''}
+      ${s.status === 'fail' && s.tail ? `<details><summary>error output</summary>
+        <div class="err">${esc(s.tail)}</div></details>` : ''}
+    </div>`;
+  }).join('');
+}
+
+function renderFeed(st) {
+  const lines = st.feed.slice(-90).reverse().map(e => {
+    let txt = e.kind;
+    if (e.kind === 'ticket_start') txt = `▸ ${e.ticket} · ${e.model}`;
+    else if (e.kind === 'attempt_end') txt = `  attempt ${e.attempt}: ${e.outcome}${e.stage?' ('+e.stage+')':''}`;
+    else if (e.kind === 'ticket_end') txt = `${e.ok?'✔':'✕'} ${e.ticket} — ${e.detail||''}`;
+    else if (e.kind === 'gate') txt = `  gate ${e.passed?'pass':'FAIL'} · ${e.command}`;
+    else if (e.kind === 'integration_step') txt = `⊞ ${e.name}: ${e.status}`;
+    else if (e.kind === 'repair') txt = `⟳ repair ${e.ticket} round ${e.round}: ${e.ok?'ok':'failed'}`;
+    else if (e.kind === 'run_end') txt = `■ run finished — integration ${e.integration_passed?'PASS':'FAIL'}`;
+    else if (e.kind === 'run_start') txt = `▶ ${e.ticket_count} tickets`;
+    else if (e.kind === 'log') txt = e.message;
+    return `<div><span class="t">${(e.elapsed||0).toFixed(1)}s</span><span>${esc(txt)}</span></div>`;
+  }).join('');
+  $('feed').innerHTML = lines || '<div class="dim">no events</div>';
+}
+
+function render(st) {
+  const built = [...st.tickets.values()].filter(t=>t.status==='good'||t.status==='repaired').length;
+  $('heroBuilt').textContent = built;
+  $('heroOf').textContent = ` / ${st.order.length || '–'}`;
+  $('title').textContent = st.repo ? st.repo : 'Factory Run';
+  const state = st.done ? (st.ok ? 'complete · integration passed'
+                                 : 'complete · integration failed') : 'running…';
+  $('subtitle').textContent = [st.arch, state, st.summary].filter(Boolean).join('  ·  ');
+  renderTiles(st); renderTickets(st); renderIntegration(st); renderFeed(st);
+  return st.done;
+}
+
+async function tick() {
+  if (!currentRun) return;
+  try {
+    const done = render(reduce(await loadEvents(currentRun)));
+    if (done && timer) { clearInterval(timer); timer = null; }
+  } catch (e) { /* run dir may not exist yet; keep polling */ }
+}
+
+async function boot() {
+  const params = new URLSearchParams(location.search);
+  const runs = await listRuns();
+  currentRun = params.get('run') || runs[0];
+  const pick = $('runPick');
+  pick.innerHTML = (currentRun ? [currentRun] : []).map(r=>`<option>${esc(r)}</option>`).join('')
+                   || '<option>no runs</option>';
+  pick.onchange = () => { currentRun = pick.value; tick(); };
+  $('themeBtn').onclick = () => {
+    const dark = document.documentElement.getAttribute('data-theme') === 'dark';
+    document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark');
+  };
+  if (!currentRun) { $('subtitle').textContent = 'no runs found in factory_runs/'; return; }
+  await tick();
+  timer = setInterval(tick, 2000);
+}
+boot();
+</script>
+</body>
+</html>

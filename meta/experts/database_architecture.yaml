@@ -1,0 +1,8 @@
+role: database_architecture
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Always create complete, production-ready Supabase database migrations with proper
+  tables, RLS policies, indexes, and foreign keys in the initial migration file.
+last_updated: '2026-09-19T21:41:32.161914+00:00'

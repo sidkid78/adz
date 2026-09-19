@@ -1,0 +1,8 @@
+role: backend_development
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Ensure Supabase edge function cron jobs for aging estimates are properly scheduled
+  and deployed.
+last_updated: '2026-09-19T21:44:27.455383+00:00'

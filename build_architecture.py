@@ -31,6 +31,7 @@ Usage:
 
 import argparse
 import json
+import shutil
 import sys
 from pathlib import Path
 
@@ -52,7 +53,13 @@ from changesets import (
     contract_for_ticket,
     validate_changeset,
 )
-from greenfield import PER_TICKET_GATE, TargetRepo, run_integration
+from factory_telemetry import NullRunLog, RunLog, new_run_id
+from greenfield import (
+    PER_TICKET_GATE,
+    TargetRepo,
+    deno_check_cmd,
+    run_integration,
+)
 from import_architecture import build_order
 
 # Cheap tier for boilerplate, reasoning tier for the hard algorithms.
@@ -109,7 +116,10 @@ def dependency_context(repo: TargetRepo, ticket: dict, owners: dict[str, str]) -
 
 
 def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str],
-                 verbose: bool = False) -> tuple[bool, str]:
+                 verbose: bool = False, log=None, layer: int = 0) -> tuple[bool, str]:
+    import time as _time
+    log = log or NullRunLog()
+    ticket_started = _time.time()
     route = ROUTES.get(ticket.get("complexity", "medium"), ROUTES["medium"])
     expert = expert_for(ticket)
 
@@ -123,6 +133,12 @@ def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str
         print(f"    expert   : {e.role} ({e.total_runs} runs, {e.success_rate:.0%} success)")
 
     print(f"    model    : {route['model']} (up to {route['max_attempts']} attempts)")
+    log.ticket_start(
+        ticket["id"], layer, route["model"], contract.required_paths,
+        route["max_attempts"],
+        {"role": expert.expertise.role, "runs": expert.expertise.total_runs,
+         "success_rate": round(expert.expertise.success_rate, 3)} if expert else None,
+    )
 
     agent = ChangesetAgent(model=route["model"], system_instruction=system_instruction)
     files = agent.write(ticket, contract, repo.existing_paths(),
@@ -130,29 +146,43 @@ def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str
 
     last_failure = "agent produced no parseable files"
     for attempt in range(1, route["max_attempts"] + 1):
+        attempt_started = _time.time()
         if not files:
             print(f"    attempt {attempt}: no files parsed from response")
+            log.attempt_end(ticket["id"], attempt, "no_files",
+                            duration=round(_time.time() - attempt_started, 2))
             files = agent.repair(last_failure, contract)
             continue
 
         written = repo.write_files(files)
         ok, detail = validate_changeset(contract, repo, written)
         if ok:
-            gate = repo.run_gate(contract.gate)
+            gate = repo.run_gate(contract.gate, log=log, ticket=ticket["id"])
             if gate.passed:
                 print(f"    attempt {attempt}: GATE PASSED ({len(written)} files)")
+                log.attempt_end(ticket["id"], attempt, "pass",
+                                duration=round(_time.time() - attempt_started, 2),
+                                files_written=len(written))
                 repo.commit(f"feat({ticket['id']}): {ticket['title']}")
                 if expert is not None:
                     try:
                         expert.record_outcome(ticket["title"], True, ", ".join(written))
                     except Exception:  # noqa: BLE001,S110 - a passing build is not undone by a memory write
                         pass
+                log.ticket_end(ticket["id"], True, attempt,
+                               round(_time.time() - ticket_started, 2),
+                               f"{len(written)} files")
                 return True, f"{len(written)} files"
             last_failure = gate.transcript
             print(f"    attempt {attempt}: gate FAILED ({gate.failed_command})")
+            log.attempt_end(ticket["id"], attempt, "gate_fail", stage=gate.failed_command,
+                            duration=round(_time.time() - attempt_started, 2),
+                            files_written=len(written))
         else:
             last_failure = f"Contract not satisfied: {detail}"
             print(f"    attempt {attempt}: contract FAILED ({detail})")
+            log.attempt_end(ticket["id"], attempt, "contract_fail", detail=detail,
+                            duration=round(_time.time() - attempt_started, 2))
 
         if verbose:
             print("      " + last_failure[-500:].replace("\n", "\n      "))
@@ -167,7 +197,10 @@ def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str
             expert.record_outcome(ticket["title"], False, last_failure[-800:])
         except Exception:  # noqa: BLE001,S110 - ditto; the gate verdict already stands
             pass
-    return False, last_failure.splitlines()[-1][:120] if last_failure else "exhausted attempts"
+    detail = last_failure.splitlines()[-1][:120] if last_failure else "exhausted attempts"
+    log.ticket_end(ticket["id"], False, route["max_attempts"],
+                   round(_time.time() - ticket_started, 2), detail)
+    return False, detail
 
 
 def blame_tickets(failure: str, owners: dict[str, str]) -> list[str]:
@@ -249,6 +282,8 @@ def main() -> int:
     ap.add_argument("--verbose", action="store_true", help="show gate output on failure")
     ap.add_argument("--no-supabase", action="store_true",
                     help="skip starting the local Supabase stack (db reset will be SKIPPED)")
+    ap.add_argument("--no-telemetry", action="store_true",
+                    help="do not write factory_runs/<id>/events.jsonl")
     ap.add_argument("--integration-rounds", type=int, default=2,
                     help="how many times to repair-and-retry the integration gate")
     args = ap.parse_args()
@@ -271,6 +306,13 @@ def main() -> int:
         for tid in layer:
             try:
                 c = contract_for_ticket(tickets[tid], PER_TICKET_GATE, set(owners))
+                # A ticket whose deliverable is a Supabase Edge Function is
+                # Deno code that tsc never sees, so without this its gate is
+                # only "the file exists". Fail it at its own gate rather
+                # than three layers later at integration.
+                edge = [f for f in c.required_paths if f.startswith("supabase/functions/")]
+                if edge and shutil.which("deno"):
+                    c.gate = [*PER_TICKET_GATE, deno_check_cmd(edge)]
             except ChangesetError as exc:
                 print(f"  [{tid}] NO CONTRACT: {exc}")
                 continue
@@ -293,21 +335,44 @@ def main() -> int:
               f"{len(owners)} file(s) total. Pass --build to run.")
         return 0
 
+    # Telemetry starts BEFORE the scaffold. It used to start after, which
+    # meant a scaffold or baseline-gate failure produced no events at all
+    # — and that is exactly the failure you most want recorded, because
+    # the run dies before any ticket has explained itself. A missing
+    # tsconfig.check.json killed a run in 30s with nothing on the
+    # dashboard to show for it.
+    log = NullRunLog() if args.no_telemetry else RunLog(run_id=new_run_id(name))
+    if not args.no_telemetry:
+        print(f"\nTelemetry : {log.events_path.relative_to(REPO_ROOT)}")
+        print("Dashboard : python factory_telemetry.py --serve  "
+              "-> http://localhost:8777/dashboard.html")
+    log.run_start(str(args.architecture), name,
+                  [tickets[t] for layer in layers for t in layer if t in contracts],
+                  layers)
+
     # ---- Scaffold -----------------------------------------------------
     if args.fresh or not repo.exists():
         print(f"\nScaffolding {repo.path} ...")
-        result = repo.scaffold(force=args.fresh, install=True)
+        with log.timed("scaffold", phase="npm install"):
+            result = repo.scaffold(force=args.fresh, install=True)
         if not result.passed:
             print(f"SCAFFOLD FAILED at {result.failed_command}\n{result.transcript[-1500:]}")
+            log.integration_step("scaffold", "fail", 0.0,
+                                 result.failed_command or "", result.transcript)
+            log.run_end([], [t for t in contracts], [], False, "scaffold failed")
             return 1
         if not args.no_supabase:
             sb = repo.supabase_init()
             print(f"supabase: {sb.transcript}")
+            log.log(f"supabase: {sb.transcript}")
 
-        baseline = repo.run_gate(PER_TICKET_GATE)
+        baseline = repo.run_gate(PER_TICKET_GATE, log=log, ticket="<baseline>")
         print(f"baseline gate: {'PASS' if baseline.passed else 'FAIL'}")
+        log.integration_step("baseline gate", "pass" if baseline.passed else "fail",
+                             0.0, "", "" if baseline.passed else baseline.transcript)
         if not baseline.passed:
             print(baseline.transcript[-1500:])
+            log.run_end([], [t for t in contracts], [], False, "baseline gate failed")
             return 1
 
     repo.branch(f"factory/{name}")
@@ -325,13 +390,14 @@ def main() -> int:
             ticket = tickets[tid]
             print(f"\n[{tid}] {ticket['title']}")
             print(f"    files    : {', '.join(contract.required_paths)}")
-            ok, detail = build_ticket(repo, ticket, contract, owners, args.verbose)
+            ok, detail = build_ticket(repo, ticket, contract, owners, args.verbose,
+                                      log=log, layer=i)
             (passed if ok else failed).append(tid)
             print(f"    result   : {'PASSED' if ok else 'FAILED'} — {detail}")
 
     # ---- Integration gate, with repair --------------------------------
     print(f"\n{'=' * 78}\nINTEGRATION GATE (whole repo)\n{'=' * 78}")
-    integration = run_integration(repo, start_supabase=not args.no_supabase)
+    integration = run_integration(repo, start_supabase=not args.no_supabase, log=log)
     print(integration.summary())
 
     repairs: list[str] = []
@@ -351,12 +417,13 @@ def main() -> int:
                 continue
             ok, detail = repair_ticket(repo, tickets[tid], contracts[tid], integration.transcript)
             print(f"    repair {tid}: {'OK' if ok else 'FAILED'} — {detail}")
+            log.repair(tid, round_no, ok, detail)
             if ok:
                 repairs.append(tid)
                 progressed = True
         if not progressed:
             break
-        integration = run_integration(repo, start_supabase=False)
+        integration = run_integration(repo, start_supabase=False, log=log)
         print(f"    re-run: {integration.summary()}")
 
     if not integration.passed:
@@ -371,6 +438,9 @@ def main() -> int:
         print(f"REPAIRED : {', '.join(repairs)}")
     print(f"REPO     : {repo.path}")
     print(f"COMMITS  :\n{repo.log(12)}")
+    log.run_end(passed, failed, repairs, integration.passed, integration.summary())
+    if not args.no_telemetry:
+        print(f"TELEMETRY: {log.events_path.relative_to(REPO_ROOT)}")
     print("=" * 78)
     return 0 if integration.passed and not failed else 1
 

@@ -1,0 +1,8 @@
+role: full_stack_development_next_js
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Always output a fully implemented, production-ready codebase in the specified path
+  to ensure successful photo categorization.
+last_updated: '2026-09-19T21:50:05.402929+00:00'

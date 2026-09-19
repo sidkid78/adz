@@ -1,0 +1,43 @@
+{
+  "bundles": {
+    "factory-706": {
+      "name": "factory",
+      "created": "2026-09-19T17:20:26.303Z",
+      "lastUsed": "2026-09-19T17:24:14.213Z",
+      "tags": [],
+      "files": [
+        "blueprints",
+        "contracts",
+        "drops",
+        "hooks",
+        "meta",
+        "sandbox",
+        "scout",
+        "tools",
+        "adz_showcase.py",
+        "adz-watcher.py",
+        "agent_harness.py",
+        "artifact_agent.py",
+        "artifact_kinds.py",
+        "build_agent.py",
+        "build_architecture.py",
+        "changesets.py",
+        "decompose_into_tickets.py",
+        "dropzone_watcher.py",
+        "factory_router.py",
+        "factory-validation.yml",
+        "gemini_build_agent.py",
+        "greenfield.py",
+        "import_architecture.py",
+        "ingest_orchestrator_report.py",
+        "main.py",
+        "orchestrator.py",
+        "prompt_registry.py",
+        "run_factory.py",
+        "spec_intake.py",
+        "target_code.py",
+        "ticket_contracts.py"
+      ]
+    }
+  }
+}

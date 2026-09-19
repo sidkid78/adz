@@ -1,0 +1,8 @@
+role: backend_development_integrations
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Always deploy and test edge functions thoroughly to ensure reliable lead intake
+  and SMS parsing.
+last_updated: '2026-09-19T21:46:40.286770+00:00'

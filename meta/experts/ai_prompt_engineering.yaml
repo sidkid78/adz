@@ -1,0 +1,8 @@
+role: ai_prompt_engineering
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Use `src/ai_service_layer.ts` for all Gemini AI service implementations to maintain
+  consistency and leverage existing functionality.
+last_updated: '2026-09-19T21:43:53.030933+00:00'

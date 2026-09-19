@@ -10,3 +10,4 @@ __pycache__/
 # and the build log is a run artifact, not source.
 factory_workspace/
 factory_build.log
+factory_runs/

@@ -264,6 +264,11 @@ Rules:
 - Keep pure logic (scheduling, scoring, optimisation) in functions that
   take plain data and return plain data, with no client or I/O inside.
   That is what makes it testable, and it is where the real behaviour is.
+- Files under supabase/functions/ are Supabase Edge Functions and run on
+  DENO, not Node. Use `Deno.serve(...)`, `Deno.env.get(...)`, and npm/jsr
+  specifiers such as `import { createClient } from "jsr:@supabase/supabase-js@2"`.
+  No Node built-ins, no `process.env`, no bare package names. They are
+  typechecked with `deno check`, not tsc.
 - When you add a test, put it in tests/ and name it *.test.ts. Tests run
   under vitest with globals enabled.
 """
