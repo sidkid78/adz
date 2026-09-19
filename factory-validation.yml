@@ -1,5 +1,3 @@
-
-
 name: Factory Validation Gate
 
 on:
@@ -57,11 +55,9 @@ jobs:
           COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
           BRANCH_NAME="${{ github.head_ref }}"
           RUN_ID="${{ github.run_id }}"
-          
-          echo "⚠️ CI Validation failed for Agent PR #$PR_NUMBER ($BRANCH_NAME)"
-          echo "Sending execution context and logs back to Factory Router..."
 
-          # Payload maps directly back to the autonomous agent's loop to trigger self-repair
+          echo "Notifying Factory Router of CI failure for PR #$PR_NUMBER ($BRANCH_NAME)"
+
           curl -X POST "$ROUTER_WEBHOOK_URL/webhook/ci-failure" \
             -H "Content-Type: application/json" \
             -H "X-Factory-Secret: $ROUTER_SECRET" \

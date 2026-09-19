@@ -1,0 +1,10 @@
+role: field_service_crm_architecture_servicetitan_api_revops_integ
+total_runs: 2
+successes: 2
+failures: 0
+notes:
+- Prioritize concise, complete technical architecture outputs by mapping endpoints,
+  payloads, and error-handling strategies upfront to prevent truncation.
+- 'Maintain strict output length limits: provide only the requested one-sentence,
+  under-25-word actionable lesson without markdown code blocks or trailing text.'
+last_updated: '2026-09-18T22:14:30.023037+00:00'

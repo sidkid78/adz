@@ -1,0 +1,8 @@
+role: system_integration_governance
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Implement risk management logic and stakeholder communication tools using structured
+  modules for assessment, logging, and notifications.
+last_updated: '2026-09-19T05:13:47.050164+00:00'

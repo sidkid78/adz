@@ -8,9 +8,13 @@ import json
 import os
 from google import genai
 
-from blueprints import Blueprint, Step
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
 
-META_BLUEPRINT_MODEL = "gemini-3.1-pro"
+from blueprints.blueprints import Blueprint, Step
+
+META_BLUEPRINT_MODEL = "gemini-3.1-pro-preview"
 
 META_BLUEPRINT_SYSTEM_INSTRUCTION = """
 You design workflow blueprints for a coding agent factory. A blueprint

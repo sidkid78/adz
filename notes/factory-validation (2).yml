@@ -1,0 +1,76 @@
+name: Factory Validation Gate
+
+on:
+  pull_request:
+    branches: [ main, master, dev ]
+    types: [ opened, synchronize, reopened ]
+
+jobs:
+  validate-agent-pr:
+    name: Lint, Type-Check, and Test
+    runs-on: ubuntu-latest
+    # Focus only on branches created by autonomous factory agents
+    if: startsWith(github.head_ref, 'agent/') || startsWith(github.head_ref, 'factory/')
+
+    steps:
+      - name: Checkout Code Base
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python Runtime
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Astral UV & Synchronize Dependencies
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
+          uv sync
+
+      - name: Run Linter (Ruff)
+        id: lint
+        run: |
+          uv run ruff check .
+
+      - name: Run Static Type Checker (Mypy)
+        id: typecheck
+        run: |
+          uv run mypy .
+
+      - name: Run Test Suite (Pytest)
+        id: test
+        run: |
+          uv run pytest --junitxml=test-results.xml
+
+      - name: Notify Factory Router on CI Failure
+        if: failure()
+        env:
+          ROUTER_WEBHOOK_URL: ${{ secrets.FACTORY_ROUTER_WEBHOOK_URL }}
+          ROUTER_SECRET: ${{ secrets.FACTORY_ROUTER_SECRET }}
+        run: |
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          REPO="${{ github.repository }}"
+          COMMIT_SHA="${{ github.event.pull_request.head.sha }}"
+          BRANCH_NAME="${{ github.head_ref }}"
+          RUN_ID="${{ github.run_id }}"
+          
+          echo "⚠️ CI Validation failed for Agent PR #$PR_NUMBER ($BRANCH_NAME)"
+          echo "Sending execution context and logs back to Factory Router..."
+
+          # Payload maps directly back to the autonomous agent's loop to trigger self-repair
+          curl -X POST "$ROUTER_WEBHOOK_URL/webhook/ci-failure" \
+            -H "Content-Type: application/json" \
+            -H "X-Factory-Secret: $ROUTER_SECRET" \
+            -d @- <<EOF
+            {
+              "event": "ci_failure",
+              "repository": "$REPO",
+              "pr_number": $PR_NUMBER,
+              "commit_sha": "$COMMIT_SHA",
+              "branch_name": "$BRANCH_NAME",
+              "run_id": "$RUN_ID",
+              "failed_step": "validation_gate"
+            }
+          EOF

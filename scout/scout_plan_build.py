@@ -30,7 +30,7 @@ def list_repo_files(root: Path, extensions=(".py", ".ts", ".tsx", ".sql")) -> li
     return [
         str(p.relative_to(root))
         for p in root.rglob("*")
-        if p.is_file() and p.suffix in extensions and ".git" not in p.parts
+        if p.is_file() and p.suffix in extensions and ".git" not in p.parts and ".venv" not in p.parts and "__pycache__" not in p.parts
     ]
 
 

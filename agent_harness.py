@@ -18,8 +18,8 @@ from pathlib import Path
 
 from google import genai
 
-from test.hooks.hook_bus import HookBus, HookContext, HookEvent
-from test.hooks.hooks_library import (
+from hooks.hook_bus import HookBus, HookContext, HookEvent
+from hooks.hooks_library import (
     make_setup_hook,
     block_destructive_commands,
     make_sandbox_test_hook,
@@ -27,15 +27,15 @@ from test.hooks.hooks_library import (
     log_stop,
     log_subagent_stop,
 )
-from .prompt_registry import PromptRegistry
+from prompt_registry import PromptRegistry
 from scout.context_rules import load_rules, rules_for_paths, compile_context_block
 from scout.scout_plan_build import list_repo_files, scout, disclose, print_context_economy, PLANNER_MODEL
 from sandbox.sandbox_pool import SandboxPool
 from sandbox.git_worktree import create_worktree, remove_worktree
-from sandboxed_agent import SandboxedHookedAgent
-from sandbox_workflow import create_pull_request
+from sandbox.sandboxed_agent import SandboxedHookedAgent
+from hooks.sandbox_workflow import create_pull_request
 
-BUILD_MODEL = "gemini-3.6-flash"
+BUILD_MODEL = "gemini-3.8-flash"
 
 # Session-specific setup — only runs for tickets that need it. Empty
 # list is the common case; a database ticket might need ["alembic

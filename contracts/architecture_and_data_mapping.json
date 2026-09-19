@@ -1,0 +1,44 @@
+{
+  "slug": "architecture_and_data_mapping",
+  "kind": "markdown_document",
+  "artifact_name": "servicetitan_ghl_integration_architecture",
+  "checks": [
+    {
+      "type": "required_sections",
+      "sections": [
+        "Technical Architecture & End-to-End Data Flow",
+        "Master Data Dictionary & Field Mapping Table",
+        "Webhook Event Schema Specifications & API Payloads",
+        "Edge Cases, Deduplication, and System Reliability Architecture"
+      ]
+    },
+    {
+      "type": "min_table_rows",
+      "count": 25
+    },
+    {
+      "type": "fenced_blocks_parse"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "Apex Comfort Solutions",
+      "description": "Must reference the correct client name"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "/jpm/v2/.*/bookings",
+      "description": "Must include the ServiceTitan v2 bookings API endpoint"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "E\\.164",
+      "description": "Must reference the E.164 phone normalization standard for deduplication"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "(?i)dead[-_\\s]letter",
+      "description": "Must define the Dead-Letter Queue (DLQ) error handling mechanism"
+    }
+  ],
+  "test_code": null
+}

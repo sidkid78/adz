@@ -1,0 +1,57 @@
+{
+  "slug": "kpi_dashboard_and_reporting",
+  "kind": "json_document",
+  "artifact_name": "operational_intelligence_kpi",
+  "checks": [
+    {
+      "type": "json_required_keys",
+      "keys": [
+        "client",
+        "data_sources",
+        "data_sources[].name",
+        "metrics",
+        "metrics[].code_identifier",
+        "metrics[].formula",
+        "metrics[].definition"
+      ]
+    },
+    {
+      "type": "min_collection_size",
+      "path": "metrics",
+      "count": 6,
+      "format": "json"
+    },
+    {
+      "type": "min_collection_size",
+      "path": "data_sources",
+      "count": 3,
+      "format": "json"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "MKT_LSA_SPEND",
+      "description": "Includes the MKT_LSA_SPEND metric code"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "OPS_LEAD_BOOK_RATE",
+      "description": "Includes the OPS_LEAD_BOOK_RATE metric code"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "SLA_TECH_ACK_SEC",
+      "description": "Includes the SLA_TECH_ACK_SEC metric code"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "(?i)Apex Comfort Solutions",
+      "description": "Mentions the client Apex Comfort Solutions"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "37,500",
+      "description": "Includes the $37,500 monthly leakage baseline"
+    }
+  ],
+  "test_code": null
+}

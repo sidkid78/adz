@@ -21,7 +21,7 @@ from ..hooks.hooks_library import log_notification, log_subagent_stop
 from ..hooks.agentic_loop import HookedAgent
 
 META_AGENT_MODEL = "gemini-3.1-pro-preview"   # planning-tier: deciding HOW to split work
-SUBAGENT_MODEL = "gemini-3.6-flash"    # workhorse-tier: each sub-agent's actual work
+SUBAGENT_MODEL = "gemini-3.8-flash"    # workhorse-tier: each sub-agent's actual work
 
 META_AGENT_SYSTEM_INSTRUCTION = """
 You are a meta-agent: you do not do the work yourself, you decide how

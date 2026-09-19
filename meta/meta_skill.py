@@ -20,7 +20,7 @@ from pathlib import Path
 from google import genai
 
 SKILLS_DIR = Path(__file__).parent / "skills"
-META_SKILL_MODEL = "gemini-3.6-flash"
+META_SKILL_MODEL = "gemini-3.8-flash"
 
 META_SKILL_SYSTEM_INSTRUCTION = """
 You write SKILL.md files describing a reusable capability for an AI

@@ -1,17 +1,27 @@
-global_settings:
-  archive_dir: "./archive"
-  outbox_dir: "./outbox"
-  log_file: "./adz_watcher.log"
+# Drop Zone Reactive Configuration
+directories:
+  specs:
+    inbox: "drops/inbox/specs"
+    outbox: "drops/outbox/specs"
+    model: "gemini-3.1-pro"
+    prompt: |
+      Decompose this planning/architecture document into atomically
+      scoped engineering tickets, one per subsystem.
 
-drop_zones:
-  - name: "echo_zone"
-    directory: "./inbox/echo"
-    patterns: ["*.txt", "*.md"]
-    command: "python3 -c \"import sys; print('=== ECHO AGENT REACTIVE OUTBOX ===\\nProcessed File: {file_name}\\nContent:\\n' + open('{file_path}').read())\""
-    color: "green"
+  finance:
+    inbox: "drops/inbox/finance"
+    outbox: "drops/outbox/finance"
+    model: "gemini-3.6-flash"
+    prompt: |
+      You are a precise finance categorizer. Process the input file,
+      extract all expenses, and output a categorized ledger.
+    validators:
+      - "uv run validators/csv-single-validator.py"
 
-  - name: "finance_categorizer"
-    directory: "./inbox/finance"
-    patterns: ["*.csv"]
-    command: "python3 -c \"print('=== FINANCE AGENT REACTIVE OUTBOX ===\\nAnalyzing CSV transaction file: {file_name}\\nCategorizing expenditures and exporting viz chart...')\""
-    color: "magenta"
+  transcribers:
+    inbox: "drops/inbox/transcribers"
+    outbox: "drops/outbox/transcribers"
+    model: "gemini-3.5-flash-lite"
+    prompt: |
+      Analyze this raw transcript. Extract key action items and output
+      a markdown summary.

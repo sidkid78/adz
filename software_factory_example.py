@@ -79,7 +79,7 @@ def main():
     client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
 
     # One chat session = the agent's "memory" across retries.
-    chat = client.chats.create(model="gemini-3.6-flash")
+    chat = client.chats.create(model="gemini-3.8-flash")
 
     TEST_FILE.write_text(TEST_CODE)
 

@@ -5,3 +5,8 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Factory build output: generated repos are their own git repos,
+# and the build log is a run artifact, not source.
+factory_workspace/
+factory_build.log

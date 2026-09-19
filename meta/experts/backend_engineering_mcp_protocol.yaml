@@ -1,0 +1,10 @@
+role: backend_engineering_mcp_protocol
+total_runs: 2
+successes: 2
+failures: 0
+notes:
+- Define TypeScript types, Supabase client, and FastMCP server initialization cleanly
+  in modular files before building tool handlers.
+- Initialize FastMCP servers with robust Supabase and TypeScript type definitions
+  right from the start.
+last_updated: '2026-09-19T05:08:21.888332+00:00'
