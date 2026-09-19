@@ -1,107 +1,215 @@
-# Autonomous Developer Zone (ADZ) — AI Software Factory
+# ADZ — Autonomous Developer Zone
 
-An autonomous software engineering factory combining progressive context disclosure, deterministic quality gates, lifecycle tool firewalls, multi-tier routing, and persistent self-improving agent experts.
+A software factory. It takes a **technical architecture** and builds it into a **real repository
+that compiles, typechecks, passes its tests, builds, and applies its own database migrations** —
+with no human in the loop between the spec going in and the commits coming out.
+
+The rule the whole system is built around:
+
+> **Code decides pass/fail, never the agent.**
+> An agent's claim that it succeeded is worth nothing. The compiler's opinion is worth
+> everything, costs no tokens, and cannot be argued with.
 
 ---
 
-## Quick Start: Master Showcase Demo
+## Proven run
 
-Run the unified showcase demonstrating all 7 pillars of the architecture in action:
+Input: an 8-subtask Next.js + Supabase + FastMCP architecture (a "Project Management MCP
+Server"), produced by a separate multi-agent planner.
 
-```powershell
-# Interactive Tour
-python adz_showcase.py
-
-# Run all 7 phases end-to-end
-python adz_showcase.py --all
-
-# Run a specific phase (1 to 7)
-python adz_showcase.py --phase 5
+```text
+BUILT    : 8/8 tickets — db_schema, mcp_init, kickoff_workflow, planning_engine,
+                         risk_comm_system, monitoring_analytics,
+                         resource_optimization, nextjs_frontend
+FILES    : 26 across 6 dependency layers
+INTEGRATE: PASS — typecheck, tests, next build, route typegen,
+                  route contracts, supabase db reset
 ```
 
+Output: [sidkid78/pm-mcp-](https://github.com/sidkid78/pm-mcp-) — 13 commits, one per ticket
+plus repairs, including a real critical-path scheduler (forward/backward pass, slack, buffers)
+that the builder wrote its own tests for.
+
 ---
 
-## The 7 Core Architectural Pillars
-
-### 1. Agentic Drop Zone (ADZ) & Spec Decomposition
-- **Files**: [`ingest_orchestrator_report.py`](file:///c:/Users/sidki/source/repos/adz/ingest_orchestrator_report.py), [`decompose_into_tickets.py`](file:///c:/Users/sidki/source/repos/adz/decompose_into_tickets.py), [`dropzone_watcher.py`](file:///c:/Users/sidki/source/repos/adz/dropzone_watcher.py)
-- Ingests raw architecture specs or multi-agent orchestrator JSON reports (`specs/nfo.json`).
-- Decomposes monolithic plans into atomic, 1-PR scoped tickets matching `{"title": "...", "description": "..."}` without requiring human micromanagement.
-
-### 2. Scout-Plan-Build & Context Economy (Progressive Disclosure)
-- **Files**: [`scout/scout_plan_build.py`](file:///c:/Users/sidki/source/repos/adz/scout/scout_plan_build.py), [`scout/context_rules.py`](file:///c:/Users/sidki/source/repos/adz/scout/context_rules.py)
-- **Scout phase**: Evaluates only file *names* (using cheap fast models like `gemini-3.5-flash-lite`).
-- **Disclose phase**: Reads strictly the 1-5 scouted files off disk.
-- **Context Economy**: Consistently achieves **90–98% token reduction** compared to full repository dumps, while injecting path-scoped architectural rules.
-
-### 3. Prompt Registry & Higher-Order Prompts (Hops)
-- **Files**: [`prompt_registry.py`](file:///c:/Users/sidki/source/repos/adz/prompt_registry.py), [`commands/`](file:///c:/Users/sidki/source/repos/adz/commands)
-- Centralized markdown prompt templates with YAML front matter.
-- **Variable Interpolation**: Dynamic variable binding via `{{variable}}`.
-- **Higher-Order Prompts (Hops)**: Splicing an inner compiled prompt directly into an outer orchestration prompt (e.g. `build_feature` nested in `infinite_builder`).
-- **System Instruction Overriding**: Mandatory system prompts traveling with compiled prompts.
-
-### 4. Lifecycle Hook Bus & Deterministic Firewalls
-- **Files**: [`hooks/hook_bus.py`](file:///c:/Users/sidki/source/repos/adz/hooks/hook_bus.py), [`hooks/hooks_library.py`](file:///c:/Users/sidki/source/repos/adz/hooks/hooks_library.py)
-- Fires hooks across the agent loop: `SETUP`, `PRE_TOOL_USE`, `POST_TOOL_USE`, `NOTIFICATION`, `STOP`.
-- **Firewall (`PRE_TOOL_USE`)**: Intercepts and blocks destructive commands (`rm -rf /`, `DROP TABLE`) before execution.
-- **Self-Repair (`POST_TOOL_USE`)**: Injects lint and test outputs back to the agent for autonomous self-healing.
-
-### 5. The Software Factory: Architecture In, Compiling Repo Out
-- **Files**: [`import_architecture.py`](file:///c:/Users/sidki/source/repos/adz/import_architecture.py), [`changesets.py`](file:///c:/Users/sidki/source/repos/adz/changesets.py), [`greenfield.py`](file:///c:/Users/sidki/source/repos/adz/greenfield.py), [`build_architecture.py`](file:///c:/Users/sidki/source/repos/adz/build_architecture.py)
-- **Core Principle**: "Code decides pass/fail, never the agent." Here that is literal — **the compiler is the reviewer**.
-- **Input** is an orch2 technical architecture; **output** is a real git repo that typechecks and passes its tests.
-- **The unit of work is a changeset, not a file.** A ticket owns several files that land together — a migration, its types, the tool that imports them.
-- **Dependency-ordered.** orch2's planner already knows `planning_engine` needs `kickoff_workflow`'s types; the DAG is resolved into layers so nothing is built before the code it imports.
-- **Contracts are derived, not invented.** The files a ticket owns are extracted deterministically from the architecture document itself, so the factory builds the architecture that was designed rather than a plausible neighbour of it.
-- **The gate is the repo's own toolchain**, in two stages. Per ticket: `tsc` (source only) + `vitest`, fast enough to run on every repair attempt. At integration: `typecheck`, `vitest`, **`next build`** and **`supabase db reset`** — the migration is actually applied to a local Postgres, and the framework's own route contracts are actually enforced.
-- **Integration failures are repaired, not just reported.** The failure is mapped back to the ticket that owns the offending file (including through Next's generated `.next/types/...` paths), that ticket is reopened with the failure as context, and the gate re-runs.
-- **A step that cannot run is reported SKIPPED with its reason**, never folded into a pass — a gate that silently skips produces the word "PASS" while measuring nothing.
-- Failures go back to the builder verbatim; a passing changeset is committed, a failing one is **reverted** so the next ticket never compiles against half-finished code.
-- **Short exports fail loudly.** The importer compares the planner's `subtask_count` against the worker steps actually present, rather than silently building less than was planned.
+## Quick start
 
 ```powershell
-python import_architecture.py <orch2-execution>.json --name pm-mcp-server
-python build_architecture.py specs/pm-mcp-server.architecture.json --plan    # no API calls
+# 1. Import an architecture (deterministic; no API calls)
+python import_architecture.py --list <orch2>/backend/workflow_logs/executions
+python import_architecture.py <execution>.json --name pm-mcp-server
+
+# 2. See the plan: dependency layers, files each ticket owns (no API calls)
+python build_architecture.py specs/pm-mcp-server.architecture.json --plan
+
+# 3. Build it
 python build_architecture.py specs/pm-mcp-server.architecture.json --build
 ```
 
-### 5b. The Document Factory & Per-Ticket Acceptance Contracts
- & Per-Ticket Acceptance Contracts
-- **Files**: [`run_factory.py`](file:///c:/Users/sidki/source/repos/adz/run_factory.py), [`spec_intake.py`](file:///c:/Users/sidki/source/repos/adz/spec_intake.py), [`ticket_contracts.py`](file:///c:/Users/sidki/source/repos/adz/ticket_contracts.py), [`artifact_kinds.py`](file:///c:/Users/sidki/source/repos/adz/artifact_kinds.py), [`artifact_agent.py`](file:///c:/Users/sidki/source/repos/adz/artifact_agent.py)
-- **Core Principle**: "Code decides pass/fail, never the agent."
-- **Any deliverable, not just Python.** A ticket produces one *artifact* — a markdown runbook, a JSON contract, a YAML config or a Python module — and each kind has deterministic checks appropriate to it: required sections, parseable code fences, required keys, minimum collection sizes, no unfilled placeholders.
-- **Per-ticket contracts**: every ticket is graded against checks authored *for that ticket* and frozen to `contracts/<slug>.json`. Without this, a ticket about dispatch automation could "PASS" by implementing `add()`, because `add()` was what the gate measured.
-- **Anti-self-grading guards**: authored by the reasoning tier before any builder exists; frozen across every retry and racer; rewritten before each run so an agent can't edit its own gate; rejected unless it *fails* against an empty artifact (checked twice — the full gate, and the ticket-specific checks alone); and rejected if it carries no ticket-specific checks at all.
-- **Failures feed back**: the gate's rejection message is what the builder sees, and the gate's verdict — never the agent's claim — is what updates the expert's permanent memory.
+Output lands in `factory_workspace/<name>/` as its own independent git repo.
 
-```powershell
-python run_factory.py --plan     # intake + routing for everything in specs/, zero API calls
-python run_factory.py            # + author, validate and freeze per-ticket contracts
-python run_factory.py --build    # + build, gate, and deliver to drops/outbox/factory/
+**Requires:** Python 3.12 + [uv](https://docs.astral.sh/uv/), Node 20+, git.
+Docker and the Supabase CLI are optional — without them the `supabase db reset` step reports
+`SKIPPED` with a reason rather than silently passing.
+
+Create `.env.local`:
+
+```env
+GEMINI_API_KEY="..."
+E2B_API_KEY="..."   # optional, for cloud sandboxes
 ```
-
-### 6. Factory Router & Multi-Tier Model Dispatch
-- **Files**: [`factory_router.py`](file:///c:/Users/sidki/source/repos/adz/factory_router.py)
-- Classifies incoming tickets into `CHORE`, `FEATURE`, or `HOTFIX`.
-- **Model Tiers**:
-  - `CHORE` -> Cheap flash-lite model, runs locally.
-  - `FEATURE` -> Frontier model plans, flash builds, sandboxed.
-  - `HOTFIX` -> Parallel racing (N sandboxes concurrently, fastest pass wins).
-
-### 7. Declarative Blueprints & Continuous-Learning Agent Experts
-- **Files**: [`blueprints/blueprints.py`](file:///c:/Users/sidki/source/repos/adz/blueprints/blueprints.py), [`meta/agent_expert.py`](file:///c:/Users/sidki/source/repos/adz/meta/agent_expert.py), [`meta/meta_prompt_agent.py`](file:///c:/Users/sidki/source/repos/adz/meta/meta_prompt_agent.py), [`artifact_agent.py`](file:///c:/Users/sidki/source/repos/adz/artifact_agent.py)
-- **Blueprints**: Workflows structured as declarative data steps (`deterministic` shell gates vs `agent` steps). The contract gate follows the same philosophy — checks are data, not hardcoded control flow.
-- **Specialists per ticket**: each ticket's `source_expertise` is compiled by `compile_worker_prompt()` into a full specialist system prompt, cached to `meta/worker_prompts/<role>.md`.
-- **Agent Experts**: an `AgentExpert` maintains persistent memory in `meta/experts/<role>.yaml`, tracking success/failure rates and distilling a lesson after every run, folding accumulated wisdom into future system prompts.
-- **The loop is closed by the gate**: `record_outcome()` is fed the contract gate's deterministic verdict, never the agent's own claim — the connection `agent_expert.py` itself flagged as the missing piece of a real pipeline. A ticket that fails today leaves a lesson the next ticket in that domain starts with.
 
 ---
 
-## Environment Setup
+## How it works
 
-Create `.env.local`:
-```env
-GEMINI_API_KEY="your-gemini-api-key"
-E2B_API_KEY="your-e2b-api-key" # Optional for live cloud sandboxes
+```text
+architecture ─┐
+              │  import_architecture.py   preserve dependencies, output_format and
+              │                           complexity; FAIL LOUDLY on a short export
+              ▼
+         tickets ── build_order()         Kahn layers — nothing is built before the
+              │                           code it imports exists
+              ▼
+       changesets.py                      derive the files each ticket owns,
+              │                           deterministically, from the architecture doc
+              ▼
+        greenfield.py                     scaffold a real git repo; npm install once
+              │
+              ▼
+      ChangesetAgent                      a specialist writes the ticket's whole
+              │                           changeset in one turn, with its dependencies'
+              │                           actual source in context
+              ▼
+   ┌─ per-ticket gate ─┐                  tsc (source only) + vitest — seconds, so it
+   │  pass → commit    │                  runs on every repair attempt
+   │  fail → feedback ─┘                  the compiler's error goes back verbatim
+   │  exhausted → REVERT                  a failed ticket leaves nothing behind
+   ▼
+  integration gate                        next build · route typegen · route contracts
+   │                                      · supabase db reset — minutes, once
+   ▼
+  blame + repair                          map the failure to the ticket that owns the
+                                          file, reopen it, re-run
 ```
+
+### Why each piece exists
+
+**Dependency ordering.** The planner already knows `planning_engine` needs `kickoff_workflow`'s
+types. Building in arbitrary order and hoping the compiler forgives you is not a factory.
+
+**Contracts are derived, not invented.** Architecture documents already name the files they
+specify — in a heading (`### 2. Core TypeScript Interfaces (src/types/index.ts)`) or a `// src/…`
+header comment on the code itself. A model asked to invent the file list would invent a
+*different* list, and the point is to build the architecture that was designed.
+
+**First writer wins.** Ownership is assigned in dependency order, so later tickets are told to
+import a file, not rewrite it. Without this a late ticket clobbers an earlier one's types and
+the failure surfaces as an unrelated error three tickets later.
+
+**Staged gating.** `npm install` and a framework build are slow. Install once at scaffold, run
+the fast source checks per ticket, run the expensive cross-cutting checks once at the end.
+That's what real CI does, for the same reason.
+
+**Revert on failure.** A ticket that never passed its gate must not leave half-written files for
+the next ticket to compile against.
+
+**Integration failures get repaired.** A per-ticket typecheck structurally cannot see that a
+route violates a framework contract, or that an import the bundler can't resolve typechecks
+fine. Those surface at integration, long after the owning ticket committed — so the failure is
+blamed back by file path (including through generated `.next/types/…` paths) and that ticket is
+reopened with the failure as context.
+
+---
+
+## Two factories
+
+Both apply the same rule to different deliverables. Pick by what the ticket produces.
+
+| | `build_architecture.py` | `run_factory.py` |
+|---|---|---|
+| **Input** | a technical architecture | a business/rollout report |
+| **Unit** | a changeset — several files in a repo | one artifact file |
+| **Gate** | the repo's own toolchain | deterministic checks over the file |
+| **Output** | commits on a branch | files in `drops/outbox/factory/` |
+
+The document factory (`artifact_kinds.py`, `ticket_contracts.py`) handles markdown runbooks,
+JSON contracts and YAML config with checks appropriate to them: required sections, parseable
+code fences, required keys, minimum collection sizes, no unfilled placeholders. Its contracts
+are authored by a model, so four guards keep them from becoming self-grading — authored before
+any builder exists, frozen on disk, rewritten before every run, and **rejected unless they fail
+against an empty artifact**.
+
+```powershell
+python run_factory.py --plan     # intake + routing, zero API calls
+python run_factory.py            # + author, validate and freeze contracts
+python run_factory.py --build    # + build, gate and deliver
+```
+
+---
+
+## Module map
+
+**The factory**
+
+| File | Role |
+|---|---|
+| `import_architecture.py` | architecture → tickets; verifies the export is complete |
+| `changesets.py` | contracts (which files a ticket owns) + the multi-file builder |
+| `greenfield.py` | the target repo: scaffold, git, gates, Supabase stack |
+| `build_architecture.py` | the driver: layers → build → gate → commit/revert → repair |
+
+**Supporting layers** — each runnable on its own; `python adz_showcase.py` tours them.
+
+| Directory | Role |
+|---|---|
+| `scout/` | progressive disclosure — pick files by *name* with a cheap model, then read only those. 90–98% token reduction vs a repo dump |
+| `prompt_registry.py`, `commands/` | markdown prompt templates, `{{variable}}` interpolation, higher-order prompts |
+| `hooks/` | lifecycle hook bus — `PRE_TOOL_USE` blocks destructive commands, `POST_TOOL_USE` feeds results back |
+| `sandbox/` | e2b sandboxes, git worktrees, the tool-calling loop |
+| `blueprints/` | workflows as data; `tool_shed.py` defers 30 tool schemas behind `discover_tools` (~47× less up-front context) |
+| `meta/` | `compile_worker_prompt()` turns a ticket's expertise into a specialist prompt; `AgentExpert` persists lessons per role, fed **the gate's verdict** and never the agent's claim |
+| `tools/` | the agent toolkit: filesystem, git, search, shell, web, tasks |
+| `factory_router.py` | routes ticket complexity to a model tier and retry budget |
+
+---
+
+## Design rules
+
+Load-bearing. Each exists because its absence caused a real failure.
+
+- **A gate that can't run reports `SKIPPED` with a reason** — never folded into a pass. A
+  silently-skipped gate prints "PASS" while measuring nothing.
+- **Verify a gate still bites.** After changing gate config, break something on purpose and
+  confirm it fails. Excluding `.next` from the base tsconfig once made `next build` go green
+  while a route still violated its contract — the gate stopped measuring rather than started
+  passing.
+- **Writes are bounded before they touch disk.** `write_files` refuses anything outside `src/`,
+  `tests/`, `supabase/`. `package.json` and `tsconfig.json` define what the gate *means*, so a
+  changeset editing them could change the verdict instead of satisfying it.
+- **Git writes are guarded.** `_assert_own_repo()` runs before every commit, branch and clean.
+  A broken `.git` in the target makes git walk *up* and operate on the factory's own repo.
+- **Never stop someone else's containers.** `allocate_supabase_ports()` asks Docker what's
+  published and picks a free block; `supabase_stop()` always passes `--project-id`.
+- **Dependencies use caret ranges**; reproducibility comes from the committed lockfile. Don't
+  pin back to exact versions — the owner keeps them current for security.
+
+---
+
+## Limitations
+
+Worth knowing before trusting it with something real.
+
+- **Test coverage is thin.** The builder writes tests when it judges them useful, not because
+  the contract demands them. Requiring a `tests/*.test.ts` path per ticket is a one-line
+  contract change, not yet made.
+- **The database is only reset, never exercised.** `supabase db reset` proves the migration
+  *applies*; nothing runs a query against the result.
+- **No PR handoff.** `hooks/sandbox_workflow.create_pull_request` exists and is unwired; runs
+  stop at a local branch.
+- **Greenfield only.** Building changesets into an existing codebase needs the `scout/`
+  disclosure layer wired into the changeset path.
+- **The scaffold is Next + Supabase + TypeScript.** Another stack means another `greenfield.py`
+  scaffold and gate set; the rest of the pipeline is stack-agnostic.
+- **`supabase db reset` is the least deterministic step** — it has hit a transient 502 on
+  container restart after the migration already applied.
