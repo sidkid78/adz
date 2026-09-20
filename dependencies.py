@@ -129,6 +129,50 @@ def verify_on_npm(names: set[str], timeout: int = 60) -> tuple[list[str], list[s
     return real, unknown
 
 
+def types_package(name: str) -> str:
+    """The DefinitelyTyped name for a package: @scope/n -> @types/scope__n."""
+    if name.startswith("@"):
+        scope, _, rest = name[1:].partition("/")
+        return f"@types/{scope}__{rest}"
+    return f"@types/{name}"
+
+
+def types_for(names: list[str], timeout: int = 60) -> list[str]:
+    """@types/* companions for packages that ship no declarations.
+
+    A package without bundled types is a dependency failure the AGENT
+    CANNOT FIX. `write_files` refuses package.json on purpose, so a
+    ticket importing canvas-confetti gets TS7016 ("could not find a
+    declaration file") and has no way to resolve it — every retry burns
+    on a problem that is not in any file it owns.
+
+    Two questions, both answered by the registry rather than guessed:
+    does the package declare its own types, and does DefinitelyTyped
+    publish some? Only when the first is no and the second is yes do we
+    add one, because installing @types beside a package that already
+    bundles them is how you get duplicate-identifier errors.
+    """
+    wanted: list[str] = []
+    for name in names:
+        own = subprocess.run(
+            ["npm", "view", name, "types", "typings"],
+            capture_output=True, text=True, timeout=timeout,
+            check=False, shell=(sys.platform == "win32"),
+        )
+        if (own.stdout or "").strip():
+            continue                      # ships its own declarations
+
+        candidate = types_package(name)
+        found = subprocess.run(
+            ["npm", "view", candidate, "version"],
+            capture_output=True, text=True, timeout=timeout,
+            check=False, shell=(sys.platform == "win32"),
+        )
+        if found.returncode == 0:
+            wanted.append(candidate)
+    return wanted
+
+
 def missing_from(repo_path: Path, names: list[str]) -> list[str]:
     """Drop anything the scaffold already declares, so a re-run is cheap."""
     import json

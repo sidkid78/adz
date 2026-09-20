@@ -32,14 +32,15 @@ exotic import form could be missed, which fails safe (a file is called
 reachable when in doubt, never unreachable).
 """
 
+import json
 import re
 from pathlib import Path
 
-# Framework entry points. These are reachable by definition: a Next.js
-# route file is loaded by the router, an edge function by the Supabase
-# runtime, a test by vitest. Nothing in the repo imports them.
-ENTRY_GLOBS = (
-    "src/index.ts",
+# PRODUCT entry points: the ones a user or a runtime actually reaches.
+# A Next.js route file is loaded by the router, an edge function by the
+# Supabase runtime, a script by whoever invokes it. Nothing in the repo
+# imports them, and reaching code from here means the code can RUN.
+PRODUCT_ENTRY_GLOBS = (
     "src/app/**/page.tsx", "src/app/**/page.ts",
     "src/app/**/route.ts", "src/app/**/route.tsx",
     "src/app/**/layout.tsx", "src/app/**/layout.ts",
@@ -49,6 +50,24 @@ ENTRY_GLOBS = (
     # Standalone scripts and cron jobs are invoked directly, not imported.
     # This is the conventional home the contract fallback writes them to.
     "src/scripts/**/*.ts",
+)
+
+# HARNESS roots: real files, but reaching code from HERE proves nothing
+# about the product.
+#
+# These used to sit in one list with the product entries, and an agent
+# under repair pressure found the hole immediately. Told to fix 14
+# unreachable modules, it wrote tests/reachability.test.ts — sixteen
+# side-effect imports and `expect(true).toBe(true)` — plus a barrel that
+# re-exported all of them. Reachability went green. The app still had no
+# page.tsx and `/` still returned 404: not one of those modules had
+# become reachable by any user.
+#
+# A test importing a module proves the module parses. It is the same
+# vacuity `validate_contract()` rejects for contracts, and reachability
+# needed its own guard. So these stay roots for THEMSELVES — a test file
+# is not an orphan — but they confer reachability on nothing.
+HARNESS_ENTRY_GLOBS = (
     "tests/**/*.test.ts", "tests/**/*.test.tsx",
     # Config files are loaded by their own tool, never imported by the
     # app. vitest.config.ts showed up as an orphan until it was listed.
@@ -96,17 +115,52 @@ def resolve(spec: str, importer: Path, repo: Path) -> Path | None:
     return None
 
 
-def entry_points(repo: Path) -> list[Path]:
+def _manifest_loads_index(repo: Path) -> bool:
+    """Does package.json actually load src/index.ts?
+
+    pm-mcp-server's src/index.ts IS the product: `npm run mcp` executes
+    it and it registers every tool. The microlearn build's src/index.ts
+    was a barrel — `export * from` every stranded module — written for
+    no reason but to make them look reachable, and nothing anywhere
+    loaded it.
+
+    The two are indistinguishable by shape, so ask the manifest instead
+    of guessing: main/module/bin/exports, or any script that names it.
+    That is the difference between an entry point and a file that merely
+    hopes to be one.
+    """
+    manifest = repo / "package.json"
+    if not manifest.exists():
+        return False
+    try:
+        data = json.loads(manifest.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return False
+    fields = [data.get("main"), data.get("module"), data.get("types")]
+    fields += list(data.get("scripts", {}).values())
+    bin_field = data.get("bin")
+    fields += list(bin_field.values()) if isinstance(bin_field, dict) else [bin_field]
+    fields.append(json.dumps(data.get("exports", "")))
+    return any("src/index" in str(f) for f in fields if f)
+
+
+def entry_points(repo: Path, harness: bool = True) -> list[Path]:
+    """Entry points. `harness=False` gives only the PRODUCT ones —
+    the set that decides whether shipped code can actually run."""
+    globs = PRODUCT_ENTRY_GLOBS + (HARNESS_ENTRY_GLOBS if harness else ())
     found: list[Path] = []
-    for pattern in ENTRY_GLOBS:
+    for pattern in globs:
         found.extend(p for p in repo.glob(pattern) if p.is_file())
+    index = repo / "src" / "index.ts"
+    if index.is_file() and _manifest_loads_index(repo):
+        found.append(index)
     return sorted(set(found))
 
 
-def reachable_files(repo: Path) -> set[Path]:
+def reachable_files(repo: Path, harness: bool = True) -> set[Path]:
     """Every source file reachable from an entry point, transitively."""
     seen: set[Path] = set()
-    queue = list(entry_points(repo))
+    queue = list(entry_points(repo, harness=harness))
     while queue:
         current = queue.pop()
         if current in seen:
@@ -133,19 +187,38 @@ def check_reachability(repo_path: Path, owned: dict[str, str] | None = None
     and the entry point's owner is the one that has to import it.
     """
     repo = repo_path.resolve()
-    reachable = reachable_files(repo)
-    entries = entry_points(repo)
+    # PRODUCT entries only. Reaching a module from a test says it parses,
+    # not that anything runs it.
+    reachable = reachable_files(repo, harness=False)
+    entries = entry_points(repo, harness=False)
 
     if not entries:
         # No entry points means the question is unanswerable, not that
         # everything failed. Say so rather than failing the build.
         return True, "no entry points found — reachability not checked", []
 
+    # A Next app whose only routes are API handlers has no user-facing
+    # surface at all. `/` returns 404, and every component built for it
+    # is stranded by definition. This shipped twice before anything
+    # noticed, because no compiler asks whether a product has a page.
+    app_dir = repo / "src" / "app"
+    if app_dir.is_dir() and not list(app_dir.rglob("page.tsx")) \
+            and not list(app_dir.rglob("page.ts")):
+        return False, (
+            "The app has no page route: src/app contains no page.tsx.\n"
+            "Every component built for the UI is unreachable by definition "
+            "and `/` returns 404.\n\n"
+            "Fix by adding src/app/page.tsx that renders the top-level "
+            "component(s) this app exists to show."
+        ), ["src/app/page.tsx"]
+
     candidates = [
         p for p in repo.rglob("*")
         if p.is_file() and p.suffix in SOURCE_SUFFIXES
         and "node_modules" not in p.parts and ".next" not in p.parts
         and not p.name.endswith(".d.ts")
+        # Harness files answer to their own tool, not to the product.
+        and "tests" not in p.parts and ".config" not in p.name
     ]
 
     orphans = sorted(
@@ -177,7 +250,11 @@ def check_reachability(repo_path: Path, owned: dict[str, str] | None = None
         "Fix by importing them from the entry point that should own them."
         " If they register themselves on a shared object imported from that"
         " entry point, use dynamic import() inside the startup function — a"
-        " static import would run them before the object is initialised."
+        " static import would run them before the object is initialised.\n\n"
+        "A test that imports them does NOT count, and neither does a barrel"
+        " that re-exports them: only the entry points listed above are"
+        " searched. If a module has no entry point that should own it, the"
+        " missing thing is the entry point — write that."
     )
     lines += ["", advice]
     return False, "\n".join(lines), orphans

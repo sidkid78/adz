@@ -1,6 +1,6 @@
 role: postgresql_database_architecture_supabase_security
-total_runs: 6
-successes: 6
+total_runs: 7
+successes: 7
 failures: 0
 notes:
 - Always write robust SQL migrations with complete database schemas and corresponding
@@ -15,4 +15,6 @@ notes:
   created tables in database migrations.
 - Always write comprehensive RLS policies and indexes alongside your initial Supabase
   schema migration to ensure security and performance from the start.
-last_updated: '2026-09-20T13:19:51.305603+00:00'
+- Always create comprehensive PostgreSQL database migrations with strictly scoped
+  RLS policies and storage bucket configurations in a single output file.
+last_updated: '2026-09-20T13:58:15.555225+00:00'

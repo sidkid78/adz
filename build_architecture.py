@@ -59,6 +59,7 @@ from dependencies import (
     extract_packages,
     missing_from,
     packages_for_architecture,
+    types_for,
     verify_on_npm,
 )
 from factory_telemetry import NullRunLog, RunLog, new_run_id
@@ -392,6 +393,12 @@ def main() -> int:
     candidates = packages_for_architecture(arch)
     if candidates:
         real, unknown = verify_on_npm(candidates)
+        # A package that ships no .d.ts is a failure the agent CANNOT
+        # fix: it gets TS7016 and write_files refuses package.json, so
+        # every retry burns on a problem outside every file it owns.
+        # canvas-confetti cost a ticket two attempts that way, and
+        # web-push would have cost the next one more.
+        real += types_for(real)
         extra_packages = real if fresh_scaffold else missing_from(repo.path, real)
         if unknown:
             # Not an error: a name the registry has never heard of is
