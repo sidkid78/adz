@@ -14,3 +14,9 @@ factory_runs/
 
 # Playwright MCP scratch (snapshots, console logs)
 .playwright-mcp/
+
+# Gemini Agent
+.gemini-agent/cache/
+
+# Visual review verdict cache (content-addressed)
+.visual_cache/

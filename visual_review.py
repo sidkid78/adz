@@ -49,6 +49,7 @@ cover.
 """
 
 import base64
+import hashlib
 import html
 import json
 import os
@@ -98,7 +99,10 @@ Reply with a single JSON object and nothing else:
     "visible_text": "the exact on-screen text nearest the defect, copied
                      character for character, or an empty string if the
                      defect is page-wide or has no text near it",
-    "hint": "what to change"}
+    "hint": "what to change",
+    "confidence": 0.0 to 1.0 — how sure you are this is a real defect
+                  and not an artefact of the screenshot or a design
+                  choice you simply dislike}
  ]}
 
 status is FAIL if and only if there is at least one CRITICAL finding.
@@ -153,6 +157,48 @@ def _extract_json(text: str) -> dict | None:
         return None
 
 
+CACHE_DIR = Path(__file__).resolve().parent / ".visual_cache"
+# A FAIL acted on below this is downgraded to advisory. A model that is
+# unsure is exactly the model that produces the FAIL-then-PASS flapping
+# which teaches people to ignore a gate.
+CONFIDENCE_FLOOR = 0.85
+
+
+def _cache_key(image_bytes: bytes, model: str) -> str:
+    """Same pixels, same prompt, same model -> same verdict, always.
+
+    The most effective answer to a non-deterministic gate is to ask it
+    less. A screenshot that has already been judged does not need
+    judging again, and a component nobody touched cannot flap between
+    runs if its verdict is content-addressed. The prompt is part of the
+    key because changing the rubric must invalidate every past verdict.
+    """
+    h = hashlib.sha256()
+    h.update(image_bytes)
+    h.update(SYSTEM_INSTRUCTION.encode("utf-8"))
+    h.update(model.encode("utf-8"))
+    return h.hexdigest()
+
+
+def _cache_read(key: str) -> dict | None:
+    f = CACHE_DIR / f"{key}.json"
+    if not f.exists():
+        return None
+    try:
+        return json.loads(f.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+
+
+def _cache_write(key: str, payload: dict) -> None:
+    try:
+        CACHE_DIR.mkdir(parents=True, exist_ok=True)
+        (CACHE_DIR / f"{key}.json").write_text(
+            json.dumps(payload), encoding="utf-8", newline="\n")
+    except OSError:
+        pass
+
+
 def review_screenshot(image_path: Path, intent: str,
                       model: str = VISION_MODEL) -> VisualReview:
     """Ask a vision model whether this page looks usable.
@@ -177,12 +223,22 @@ def review_screenshot(image_path: Path, intent: str,
     # base64 payloads — NOT types.Part objects, which it rejects with a
     # hundred-line pydantic union error that names every branch except
     # the one you want.
-    encoded = base64.b64encode(image_path.read_bytes()).decode("ascii")
+    image_bytes = image_path.read_bytes()
+    key = _cache_key(image_bytes, model)
+    cached = _cache_read(key)
+    if cached is not None:
+        return VisualReview(status=cached["status"], summary=cached["summary"],
+                            findings=cached["findings"], raw="(cached)")
+    encoded = base64.b64encode(image_bytes).decode("ascii")
 
     try:
         interaction = client.interactions.create(
             model=model,
             system_instruction=SYSTEM_INSTRUCTION,
+            # Sampling variance is the first cause of a gate that says
+            # FAIL then PASS on the same commit. Zero does not make a
+            # model deterministic, but it removes the part we control.
+            extra_body={"generation_config": {"temperature": 0.0}},
             input=[
                 {"type": "image", "data": encoded, "mime_type": "image/png"},
                 {"type": "text",
@@ -199,15 +255,24 @@ def review_screenshot(image_path: Path, intent: str,
         return VisualReview(summary="model returned no parseable JSON", raw=raw[:2000])
 
     findings = [f for f in parsed.get("findings", []) if isinstance(f, dict)]
+    # A CRITICAL the model is unsure about becomes a WARNING. It stays
+    # visible in the report; it just stops failing the build.
+    for f in findings:
+        try:
+            confidence = float(f.get("confidence", 1.0))
+        except (TypeError, ValueError):
+            confidence = 1.0
+        if f.get("severity") == "CRITICAL" and confidence < CONFIDENCE_FLOOR:
+            f["severity"] = "WARNING"
+            f["description"] = (f"{f.get('description', '')} "
+                                f"[downgraded: confidence {confidence:.2f} "
+                                f"< {CONFIDENCE_FLOOR}]")
     # The model's own status is not trusted: recompute from the findings
     # so "PASS" with a CRITICAL attached cannot slip through.
     status = "FAIL" if any(f.get("severity") == "CRITICAL" for f in findings) else "PASS"
-    return VisualReview(
-        status=status,
-        summary=str(parsed.get("summary", ""))[:400],
-        findings=findings,
-        raw=raw[:4000],
-    )
+    summary = str(parsed.get("summary", ""))[:400]
+    _cache_write(key, {"status": status, "summary": summary, "findings": findings})
+    return VisualReview(status=status, summary=summary, findings=findings, raw=raw[:4000])
 
 
 def _normalise(text: str) -> str:
