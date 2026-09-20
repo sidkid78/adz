@@ -46,6 +46,13 @@ PRODUCT_ENTRY_GLOBS = (
     "src/app/**/layout.tsx", "src/app/**/layout.ts",
     "src/app/**/template.tsx", "src/app/**/loading.tsx",
     "src/app/**/error.tsx", "src/app/**/not-found.tsx",
+    "src/app/**/global-error.tsx", "src/app/**/default.tsx",
+    # Next convention files the framework loads by NAME, at the project
+    # or src root. Omitting middleware.ts made it a false orphan: its
+    # only legitimate owner is the framework, so no import of it can
+    # ever exist and no agent could have satisfied the check.
+    "middleware.ts", "src/middleware.ts",
+    "instrumentation.ts", "src/instrumentation.ts",
     "supabase/functions/*/index.ts",
     # Standalone scripts and cron jobs are invoked directly, not imported.
     # This is the conventional home the contract fallback writes them to.

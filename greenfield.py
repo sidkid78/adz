@@ -564,12 +564,30 @@ class TargetRepo:
 
     # ---- writing changesets -----------------------------------------
     def write_files(self, files: dict[str, str],
-                    allowed_roots: tuple[str, ...] | None = None) -> list[str]:
+                    allowed_roots: tuple[str, ...] | None = None,
+                    allow_new_tests: bool = True) -> list[str]:
         """Write a changeset, enforcing the boundary BEFORE touching disk.
 
-        Two separate refusals:
+        Three separate refusals:
           - escaping the repo entirely (../../etc);
-          - writing outside the roots a ticket owns.
+          - writing outside the roots a ticket owns;
+          - inventing a NEW test file during a repair (`allow_new_tests`).
+
+        THE THIRD ONE, AND WHY IT IS NOT "NO NEW FILES"
+        -----------------------------------------------
+        Told to fix 14 unreachable modules, a repair wrote
+        tests/reachability.test.ts — sixteen side-effect imports and
+        `expect(true).toBe(true)` — and the check went green while the
+        app still returned 404. The builder could not edit package.json
+        or tsconfig, but nothing stopped it from authoring a new test
+        whose only job was to satisfy a checker.
+
+        A blanket ban on new files would have blocked the REAL fix too:
+        what that failure actually needed was a new product file,
+        src/app/page.tsx. So the line is drawn between product code and
+        tests. During a repair a ticket may create product files and may
+        rewrite tests it already owns; it may not conjure a new test.
+        A test is evidence, and evidence minted to order is worthless.
 
         The second used to be checked only after the fact, by
         validate_changeset, which meant an out-of-bounds file was already
@@ -591,6 +609,13 @@ class TargetRepo:
                 raise ValueError(
                     f"refusing to write outside {roots}: {rel} "
                     f"(toolchain config defines what the gate means and is not a ticket's to change)"
+                )
+            if (not allow_new_tests and normalised.startswith("tests/")
+                    and not target.exists()):
+                raise ValueError(
+                    f"refusing to create a new test file during a repair: {rel} "
+                    f"(fix the code the gate rejected; a test authored to satisfy "
+                    f"a checker is not evidence)"
                 )
             planned.append((target, content, normalised))
 
@@ -812,6 +837,7 @@ ROUTE_CONTRACTS = ["npm", "run", "--silent", "check:routes"]
 # Our own check, run as a subprocess so it reports through the same
 # GateResult path as every other step rather than needing a special case.
 REACHABILITY = [sys.executable, str(REPO_ROOT / "reachability.py"), "."]
+RUNTIME_PROOF = [sys.executable, str(REPO_ROOT / "runtime_proof.py"), "."]
 DB_RESET = ["supabase", "db", "reset"]
 
 # Per-ticket: seconds, so it can run on every repair attempt.
@@ -842,6 +868,20 @@ def edge_function_files(repo: "TargetRepo") -> list[str]:
 
 def deno_check_cmd(files: list[str]) -> list[str]:
     return ["deno", "check", *files]
+
+
+def _has_production_build(repo: "TargetRepo") -> tuple[bool, str]:
+    """A runtime proof needs something built to serve.
+
+    Runs after `next build` in the step order, so in a healthy run this
+    is satisfied. Saying so explicitly means a missing build is reported
+    SKIPPED with a reason rather than counted as a pass.
+    """
+    if not (repo.path / "package.json").exists():
+        return False, "no package.json"
+    if not (repo.path / ".next" / "BUILD_ID").exists():
+        return False, "no production build in .next (next build did not run)"
+    return True, "production build present"
 
 
 def _has_entry_points(repo: "TargetRepo") -> tuple[bool, str]:
@@ -928,6 +968,12 @@ INTEGRATION_STEPS = [
     # The local stack restarts its containers at the end of a reset, and
     # the storage container is sometimes not listening yet when the CLI
     # probes it. The migration has already applied by then.
+    # Every step above is STATIC: they ask whether the code compiles,
+    # typechecks, tests and wires up. None of them ever started the
+    # server and made a request — which is how a repo whose `/` returned
+    # 404 passed the entire gate, twice. "Does it compile" and "does it
+    # run" are different questions.
+    Step("runtime proof", RUNTIME_PROOF, _has_production_build, timeout=300),
     Step("supabase db reset", DB_RESET, _supabase_available, timeout=900, retries=2),
 ]
 

@@ -276,7 +276,13 @@ def repair_ticket(repo: TargetRepo, ticket: dict, contract, failure: str,
     for attempt in range(1, max_attempts + 1):
         if not files:
             return False, "agent produced no parseable files"
-        repo.write_files(files)
+        # A repair fixes code the gate rejected. It does not get to mint
+        # new tests: that is how an earlier one "fixed" reachability.
+        try:
+            repo.write_files(files, allow_new_tests=False)
+        except ValueError as refused:
+            files = agent.repair(str(refused), contract)
+            continue
         gate = repo.run_gate(PER_TICKET_GATE)
         if gate.passed:
             repo.commit(f"fix({ticket['id']}): satisfy integration gate")
