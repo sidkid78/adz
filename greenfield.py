@@ -263,6 +263,41 @@ class GateResult:
     failed_command: str | None = None
 
 
+def force_wipe(path: Path, attempts: int = 3) -> list[str]:
+    """Delete a directory tree, returning whatever could not be removed.
+
+    Windows keeps a handle on files a running process has open, and a
+    read-only bit is enough to stop rmtree on its own. Both are ordinary
+    after an interrupted build, so this clears the read-only bit, retries,
+    and — crucially — REPORTS what survived instead of swallowing it.
+
+    node_modules is deliberately included: a stale tree beside a fresh
+    package.json is how a build ends up typechecking against the wrong
+    versions.
+    """
+    import stat
+
+    def clear_readonly(func, target, _exc):
+        try:
+            os.chmod(target, stat.S_IWRITE)
+            func(target)
+        except OSError:
+            pass
+
+    for attempt in range(attempts):
+        shutil.rmtree(path, onexc=clear_readonly)
+        if not path.exists():
+            return []
+        if attempt < attempts - 1:
+            time.sleep(1.0)  # give a closing process a moment
+
+    return sorted(
+        p.relative_to(path).as_posix()
+        for p in path.rglob("*")
+        if p.is_file() and "node_modules" not in p.parts
+    ) or [path.as_posix()]
+
+
 def _run(cmd: list[str], cwd: Path, timeout: int = 900) -> subprocess.CompletedProcess:
     # shell=True on Windows so npm/npx resolve through their .cmd shims;
     # the command list is ours, never agent-supplied, so there is no
@@ -299,14 +334,44 @@ class TargetRepo:
     def exists(self) -> bool:
         return (self.path / "package.json").exists()
 
-    def scaffold(self, force: bool = False, install: bool = True) -> GateResult:
-        """Create the repo, commit the skeleton, install dependencies once."""
+    def scaffold(self, force: bool = False, install: bool = True,
+                 extra_packages: list[str] | None = None) -> GateResult:
+        """Create the repo, commit the skeleton, install dependencies once.
+
+        `extra_packages` are the architecture's own imports. They are
+        merged into package.json BEFORE the single `npm install`, rather
+        than added by a second install afterwards: a second resolution
+        pass rewrites the tree and drops optional native bindings —
+        vitest's rolldown binary vanished that way, and the test step then
+        failed with "Cannot find module './rolldown-binding.wasi.cjs'"
+        on a repo whose code was fine.
+        """
         if self.path.exists() and force:
-            shutil.rmtree(self.path, ignore_errors=True)
+            survivors = force_wipe(self.path)
+            if survivors:
+                # `ignore_errors=True` used to hide this: an interrupted
+                # run leaves node/tsc holding files open, rmtree skips
+                # them, and the "fresh" scaffold starts on a dirty tree.
+                # The last time it happened, source files from a killed
+                # build failed the baseline gate before any ticket ran.
+                return GateResult(
+                    False,
+                    "--fresh could not empty the target repo. These survived:\n  "
+                    + "\n  ".join(survivors[:12])
+                    + "\n\nSomething still holds them open — a dev server, a "
+                      "`next build`, or an editor. Stop it and re-run.",
+                    "force wipe",
+                )
         self.path.mkdir(parents=True, exist_ok=True)
 
+        # Deep-copy so the module-level template is never mutated across
+        # runs, and merge the architecture's imports in before the single
+        # install resolves the whole tree at once.
+        package = json.loads(json.dumps(PACKAGE_JSON))
+        for name in extra_packages or []:
+            package["dependencies"].setdefault(name, "latest")
         (self.path / "package.json").write_text(
-            json.dumps(PACKAGE_JSON, indent=2), encoding="utf-8", newline="\n")
+            json.dumps(package, indent=2), encoding="utf-8", newline="\n")
         (self.path / "tsconfig.json").write_text(
             json.dumps(TSCONFIG, indent=2), encoding="utf-8", newline="\n")
         # The per-ticket gate runs `tsc -p tsconfig.check.json`, so this
@@ -344,6 +409,52 @@ class TargetRepo:
 
         self.commit("chore: scaffold project skeleton")
         return GateResult(True, "\n".join(transcript))
+
+    def install_packages(self, names: list[str], timeout: int = 900) -> GateResult:
+        """Install packages the architecture imports but the scaffold lacks.
+
+        Tickets cannot do this themselves — write_files refuses
+        package.json — so a missing dependency is unfixable by the agent
+        and burns every retry on `Cannot find module`. The names are
+        verified against the registry before they get here.
+
+        Type packages are handled too: `strict` typechecking fails on an
+        untyped dependency, and for libraries that ship no declarations
+        the fix is @types/<name>, which is a toolchain concern and so
+        equally out of a ticket's reach.
+        """
+        if not names:
+            return GateResult(True, "no additional packages required")
+
+        transcript = [f"== npm install {' '.join(names)} =="]
+        proc = _run(["npm", "install", "--no-audit", "--no-fund", *names],
+                    self.path, timeout=timeout)
+        transcript.append(((proc.stdout or "") + (proc.stderr or "")).strip()[-2000:])
+        if proc.returncode != 0:
+            return GateResult(False, "\n".join(transcript), "npm install")
+
+        untyped = [n for n in names if not self._ships_types(n)]
+        type_pkgs = [f"@types/{n.replace('@', '').replace('/', '__')}" for n in untyped]
+        if type_pkgs:
+            # Best effort: most of these do not exist, and that is fine —
+            # a package without @types is not an error, just untyped.
+            transcript.append(f"== trying {len(type_pkgs)} @types package(s) ==")
+            for tp in type_pkgs:
+                _run(["npm", "install", "--no-audit", "--no-fund", "--save-dev", tp],
+                     self.path, timeout=180)
+        return GateResult(True, "\n".join(transcript))
+
+    def _ships_types(self, name: str) -> bool:
+        pkg = self.path / "node_modules" / Path(name) / "package.json"
+        if not pkg.exists():
+            return True  # not installed; nothing useful to say
+        try:
+            data = json.loads(pkg.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return True
+        if data.get("types") or data.get("typings"):
+            return True
+        return any((pkg.parent).glob("**/*.d.ts"))
 
     # ---- git ---------------------------------------------------------
     def _git_toplevel(self) -> Path | None:

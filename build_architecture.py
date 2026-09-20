@@ -53,6 +53,11 @@ from changesets import (
     contract_for_ticket,
     validate_changeset,
 )
+from dependencies import (
+    missing_from,
+    packages_for_architecture,
+    verify_on_npm,
+)
 from factory_telemetry import NullRunLog, RunLog, new_run_id
 from greenfield import (
     PER_TICKET_GATE,
@@ -350,11 +355,38 @@ def main() -> int:
                   [tickets[t] for layer in layers for t in layer if t in contracts],
                   layers)
 
+    # ---- Dependencies the architecture imports -------------------------
+    # Resolved BEFORE the scaffold so they land in package.json and the
+    # whole tree resolves in ONE npm install. A second install afterwards
+    # rewrites the tree and drops optional native bindings — that is how
+    # vitest lost its rolldown binary, failing the test step on a repo
+    # whose code was fine.
+    #
+    # A ticket cannot do this itself (write_files refuses package.json),
+    # so a missing dependency is unfixable by the agent and burns every
+    # retry on "Cannot find module".
+    fresh_scaffold = args.fresh or not repo.exists()
+    extra_packages: list[str] = []
+    candidates = packages_for_architecture(arch)
+    if candidates:
+        real, unknown = verify_on_npm(candidates)
+        extra_packages = real if fresh_scaffold else missing_from(repo.path, real)
+        if unknown:
+            # Not an error: a name the registry has never heard of is
+            # usually illustrative, occasionally a model inventing a
+            # library. Either way, do not try to install it.
+            print(f"deps     : ignoring {len(unknown)} unknown name(s): {', '.join(unknown)}")
+            log.log(f"unknown packages ignored: {', '.join(unknown)}")
+        print(f"deps     : {len(extra_packages)} package(s) from the architecture"
+              + (f": {', '.join(extra_packages)}" if extra_packages else " (all present)"))
+        log.log(f"architecture packages: {', '.join(extra_packages) or 'none needed'}")
+
     # ---- Scaffold -----------------------------------------------------
-    if args.fresh or not repo.exists():
+    if fresh_scaffold:
         print(f"\nScaffolding {repo.path} ...")
         with log.timed("scaffold", phase="npm install"):
-            result = repo.scaffold(force=args.fresh, install=True)
+            result = repo.scaffold(force=args.fresh, install=True,
+                                   extra_packages=extra_packages)
         if not result.passed:
             print(f"SCAFFOLD FAILED at {result.failed_command}\n{result.transcript[-1500:]}")
             log.integration_step("scaffold", "fail", 0.0,
@@ -365,15 +397,25 @@ def main() -> int:
             sb = repo.supabase_init()
             print(f"supabase: {sb.transcript}")
             log.log(f"supabase: {sb.transcript}")
-
-        baseline = repo.run_gate(PER_TICKET_GATE, log=log, ticket="<baseline>")
-        print(f"baseline gate: {'PASS' if baseline.passed else 'FAIL'}")
-        log.integration_step("baseline gate", "pass" if baseline.passed else "fail",
-                             0.0, "", "" if baseline.passed else baseline.transcript)
-        if not baseline.passed:
-            print(baseline.transcript[-1500:])
-            log.run_end([], [t for t in contracts], [], False, "baseline gate failed")
+    elif extra_packages:
+        # Existing repo: its package.json predates this architecture.
+        with log.timed("install_packages", packages=extra_packages):
+            result = repo.install_packages(extra_packages)
+        if not result.passed:
+            print(f"DEPENDENCY INSTALL FAILED\n{result.transcript[-1200:]}")
+            log.run_end([], list(contracts), [], False, "dependency install failed")
             return 1
+
+    # The baseline must be green before any ticket runs, so that every
+    # later gate result is attributable to the ticket that just ran.
+    baseline = repo.run_gate(PER_TICKET_GATE, log=log, ticket="<baseline>")
+    print(f"baseline gate: {'PASS' if baseline.passed else 'FAIL'}")
+    log.integration_step("baseline gate", "pass" if baseline.passed else "fail",
+                         0.0, "", "" if baseline.passed else baseline.transcript)
+    if not baseline.passed:
+        print(baseline.transcript[-1500:])
+        log.run_end([], [t for t in contracts], [], False, "baseline gate failed")
+        return 1
 
     repo.branch(f"factory/{name}")
 
