@@ -839,6 +839,7 @@ ROUTE_CONTRACTS = ["npm", "run", "--silent", "check:routes"]
 REACHABILITY = [sys.executable, str(REPO_ROOT / "reachability.py"), "."]
 RUNTIME_PROOF = [sys.executable, str(REPO_ROOT / "runtime_proof.py"), "."]
 VISUAL_REVIEW = [sys.executable, str(REPO_ROOT / "visual_review.py"), "."]
+CLEAN_INSTALL = [sys.executable, str(REPO_ROOT / "clean_install.py"), "."]
 DB_RESET = ["supabase", "db", "reset"]
 
 # Per-ticket: seconds, so it can run on every repair attempt.
@@ -869,6 +870,14 @@ def edge_function_files(repo: "TargetRepo") -> list[str]:
 
 def deno_check_cmd(files: list[str]) -> list[str]:
     return ["deno", "check", *files]
+
+
+def _is_committed_repo(repo: "TargetRepo") -> tuple[bool, str]:
+    if not (repo.path / ".git").exists():
+        return False, "not a git repo"
+    if not (repo.path / "package-lock.json").exists():
+        return False, "no package-lock.json to install from"
+    return True, "committed repo with a lockfile"
 
 
 def _has_proof_screenshot(repo: "TargetRepo") -> tuple[bool, str]:
@@ -1040,6 +1049,13 @@ INTEGRATION_STEPS = [
     # discarded and recomputed from its findings — a model's opinion can
     # fail a build here, never rescue one another step already failed.
     Step("visual review", VISUAL_REVIEW, _has_proof_screenshot, timeout=300),
+    # Everything above runs against the workspace the factory built —
+    # the one environment where node_modules is already correct. This
+    # clones the committed HEAD somewhere clean and installs from the
+    # lockfile alone, which is the only way to see a repo that works
+    # for us and for nobody else. It found exactly that on its first
+    # run: a lockfile out of sync with its own package.json.
+    Step("clean install", CLEAN_INSTALL, _is_committed_repo, timeout=1800),
     Step("supabase db reset", DB_RESET, _supabase_available, timeout=900, retries=2),
 ]
 
