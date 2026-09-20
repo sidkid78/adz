@@ -69,6 +69,23 @@ _PATH_ROOTS = (
 # of a longer path: "lib/supabase/client.ts" yielded "supabase/client.ts",
 # which put application code in the edge-function directory, outside
 # tsconfig's include, where nothing would ever typecheck it.
+# A migration is routinely named WITHOUT its directory — architectures
+# write `-- Migration: 20250228000001_habitex_spatial_core.sql` because
+# that is how the Supabase CLI names the file, and the directory is
+# implied. Requiring a known root dropped it, and the consequences ran
+# five deep: no migration file, so nothing for `supabase gen types` to
+# read, so the ticket hand-wrote a Database type, so it omitted the
+# Relationships key, so every row resolved to `never`, so a later repair
+# cast an insert payload to `never` to silence the compiler. One missed
+# path, five symptoms, none of them near the cause.
+#
+# The timestamp prefix is what makes this safe to recognise: a bare
+# `schema.sql` could be anything, but `20250228000001_name.sql` is the
+# Supabase migration convention and nothing else.
+_BARE_MIGRATION_RE = re.compile(
+    r"(?<![A-Za-z0-9_./-])(\d{8,14}_[A-Za-z0-9_\-]+\.sql)"
+)
+
 _PATH_RE = re.compile(
     r"(?<![A-Za-z0-9_./-])((?:" + _PATH_ROOTS + r")/[A-Za-z0-9_\-./\[\]]+\.(?:tsx|ts|sql))"
 )
@@ -82,6 +99,8 @@ def normalize_path(path: str) -> str:
     belongs under `src/`, which is what tsconfig includes."""
     if path.startswith(("src/", "tests/", "supabase/")):
         return path
+    if _BARE_MIGRATION_RE.fullmatch(path):
+        return f"supabase/migrations/{path}"
     return f"src/{path}"
 
 # Many documents put the path in a header comment on the first line of
@@ -168,7 +187,15 @@ def extract_owned_paths(architecture: str) -> list[str]:
         else:
             matches = _PATH_RE.findall(section)
             if not matches:
-                continue
+                # A migration usually names itself without a directory,
+                # and in a form the self-naming pattern misses because
+                # of the words in between: `-- Migration: 2025…_x.sql`.
+                # Look in the section AND the first line of the code.
+                bare = (_BARE_MIGRATION_RE.findall(section)
+                        or _BARE_MIGRATION_RE.findall(body[:200]))
+                if not bare:
+                    continue
+                matches = bare
             path = normalize_path(matches[-1])  # mention closest to the code wins
 
         if path not in owned:
