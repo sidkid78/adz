@@ -54,6 +54,7 @@ from changesets import (
     ChangesetAgent,
     ChangesetError,
     contract_for_ticket,
+    specified_but_unowned,
     validate_changeset,
 )
 from cost import Ledger
@@ -399,6 +400,23 @@ def main() -> int:
                 print(f"  {mark}[{tickets[tid]['complexity']:6}] {tid:22} {c.describe()}")
             else:
                 print(f"  {mark}[{tickets[tid]['complexity']:6}] {tid:22} (skipped — no contract)")
+
+    # Architectures draw the project layout as a tree. Anything drawn
+    # there and owned by nobody is work the planner asked for that this
+    # run will silently skip — which is how a build shipped with no `/`
+    # route while its own architecture specified app/(marketing)/page.tsx.
+    # Said BEFORE the build rather than discovered by an integration gate
+    # afterwards.
+    unowned = specified_but_unowned(arch["tickets"], set(owners))
+    if unowned:
+        routes = [p for p in unowned if p.endswith(("page.tsx", "page.ts", "route.ts"))]
+        print(f"\nUNBUILT  : {len(unowned)} file(s) the architecture's directory "
+              f"trees name but no ticket owns")
+        for path in (routes or unowned)[:8]:
+            print(f"           {path}")
+        if routes:
+            print("           ^ these are ROUTES — without them the app has no "
+                  "such pages, whatever else builds.")
 
     if args.plan or not args.build:
         print(f"\n{len(contracts)} ticket(s) contracted, "

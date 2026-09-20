@@ -225,6 +225,77 @@ def _extension_ok(path: str, output_format: str) -> bool:
     return Path(path).suffix in allowed
 
 
+_TREE_LINE = re.compile(
+    r"^(?P<prefix>[\s│]*)(?:[├└]──\s*)(?P<name>[^\s#]+)"
+)
+
+
+def parse_directory_tree(text: str) -> list[str]:
+    """Every file path in an ASCII directory tree.
+
+    Architectures routinely draw the project layout as a tree, and this
+    factory ignored them for a long time — `extract_owned_paths` takes
+    ONE path per code fence, so a 73-line tree describing forty-four
+    files contributed a single path, or none.
+
+    That is how two builds shipped with no `/` route. The microlearn
+    architecture's tree says:
+
+        app/(marketing)/page.tsx   # Landing page (hero, value prop)
+
+    `(marketing)` is a Next route group, so that file IS the site root.
+    It was specified, and dropped. I twice concluded the planner had not
+    asked for a composition root; the planner had drawn it.
+
+    Indentation is four columns per level, which is what every tree
+    renderer emits. A name containing a dot and no trailing slash is a
+    file; everything else is a directory and goes on the stack.
+    """
+    stack: list[str] = []
+    out: list[str] = []
+    for raw in text.splitlines():
+        m = _TREE_LINE.match(raw)
+        if not m:
+            continue
+        depth = len(m.group("prefix")) // 4
+        name = m.group("name").rstrip("/")
+        del stack[depth:]
+        stack.append(name)
+        if "." in name and not name.startswith("."):
+            out.append("/".join(stack))
+    return out
+
+
+def tree_paths(architecture: str) -> list[str]:
+    """Normalised file paths from every directory tree in a document."""
+    found: list[str] = []
+    for fence in _FENCE_RE.findall(architecture):
+        if "├─" not in fence and "└─" not in fence:
+            continue
+        for path in parse_directory_tree(fence):
+            norm = normalize_path(path)
+            if norm.startswith(ALLOWED_ROOTS) and norm not in found:
+                found.append(norm)
+    return found
+
+
+def specified_but_unowned(tickets: list[dict], owned: set[str]) -> list[str]:
+    """Paths the architecture's own trees name that no ticket will build.
+
+    The trees are the planner's statement of what the project contains.
+    Anything drawn there and owned by nobody is work the architecture
+    asked for and the factory is about to skip — which is a question
+    worth asking BEFORE the build, not after an integration gate
+    discovers the app has no home page.
+    """
+    drawn: list[str] = []
+    for ticket in tickets:
+        for path in tree_paths(ticket.get("architecture", "")):
+            if path not in drawn:
+                drawn.append(path)
+    return [p for p in drawn if p not in owned]
+
+
 def contract_for_ticket(ticket: dict, gate: list[list[str]],
                         already_owned: set[str]) -> ChangesetContract:
     """Derive a changeset contract, deterministically. Raises
