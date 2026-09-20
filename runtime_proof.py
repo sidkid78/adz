@@ -156,20 +156,39 @@ def check_routes(repo_path: Path, routes: tuple[str, ...] = ("/",),
 
 
 def _screenshot(repo_path: Path, base: str) -> str:
-    """Visual proof, when the repo already has Playwright. Never fatal."""
+    """Visual proof, captured with the FACTORY's Playwright.
+
+    Not the target repo's. Screenshotting is a gate's job, so the
+    browser belongs to the thing doing the gating — adding
+    @playwright/test plus a 115MB browser download to every generated
+    repo would make the product carry its inspector around forever.
+
+    Never fatal: a missing browser costs the visual review, not the
+    build.
+    """
     out = repo_path / "artifacts" / "proof-of-work.png"
     out.parent.mkdir(parents=True, exist_ok=True)
     try:
-        proc = subprocess.run(
-            ["npx", "--no-install", "playwright", "screenshot",
-             "--full-page", base + "/", str(out)],
-            cwd=repo_path, capture_output=True, text=True,
-            timeout=120, check=False, shell=(os.name == "nt"),
-        )
-        if proc.returncode == 0 and out.exists():
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        return ""
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch()
+            try:
+                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                page.goto(base + "/", wait_until="load", timeout=60000)
+                # Client components hydrate after load; a screenshot taken
+                # at `load` can catch a skeleton and report it as a blank
+                # UI that nothing is actually wrong with.
+                page.wait_for_timeout(1500)
+                page.screenshot(path=str(out), full_page=True)
+            finally:
+                browser.close()
+        if out.exists():
             return f"  proof: {out.relative_to(repo_path).as_posix()}"
-    except (OSError, subprocess.SubprocessError):
-        pass
+    except Exception as exc:  # noqa: BLE001 - visual proof is a bonus, never a failure
+        return f"  (no screenshot: {type(exc).__name__})"
     return ""
 
 

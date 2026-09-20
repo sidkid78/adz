@@ -838,6 +838,7 @@ ROUTE_CONTRACTS = ["npm", "run", "--silent", "check:routes"]
 # GateResult path as every other step rather than needing a special case.
 REACHABILITY = [sys.executable, str(REPO_ROOT / "reachability.py"), "."]
 RUNTIME_PROOF = [sys.executable, str(REPO_ROOT / "runtime_proof.py"), "."]
+VISUAL_REVIEW = [sys.executable, str(REPO_ROOT / "visual_review.py"), "."]
 DB_RESET = ["supabase", "db", "reset"]
 
 # Per-ticket: seconds, so it can run on every repair attempt.
@@ -868,6 +869,20 @@ def edge_function_files(repo: "TargetRepo") -> list[str]:
 
 def deno_check_cmd(files: list[str]) -> list[str]:
     return ["deno", "check", *files]
+
+
+def _has_proof_screenshot(repo: "TargetRepo") -> tuple[bool, str]:
+    """A visual review needs a screenshot and a key.
+
+    Both are genuinely optional — no browser or no API key costs the
+    review, not the build — so say SKIPPED with the reason rather than
+    folding an unmeasured step into a pass.
+    """
+    if not (repo.path / "artifacts" / "proof-of-work.png").exists():
+        return False, "no proof-of-work screenshot (runtime proof captured none)"
+    if not (os.environ.get("GEMINI_API_KEY") or os.environ.get("GOOGLE_API_KEY")):
+        return False, "no API key for the vision model"
+    return True, "screenshot present"
 
 
 def _has_production_build(repo: "TargetRepo") -> tuple[bool, str]:
@@ -974,6 +989,16 @@ INTEGRATION_STEPS = [
     # 404 passed the entire gate, twice. "Does it compile" and "does it
     # run" are different questions.
     Step("runtime proof", RUNTIME_PROOF, _has_production_build, timeout=300),
+    # The only step whose checker is a model, and the only one that can
+    # see what none of the others can: Tailwind never installed, text
+    # white on white, a button covering the heading. A class name that
+    # resolves to nothing is valid TypeScript, so this factory once
+    # shipped an unstyled app through a fully green gate.
+    #
+    # It fails ONLY on a CRITICAL finding, and its own "PASS" is
+    # discarded and recomputed from its findings — a model's opinion can
+    # fail a build here, never rescue one another step already failed.
+    Step("visual review", VISUAL_REVIEW, _has_proof_screenshot, timeout=300),
     Step("supabase db reset", DB_RESET, _supabase_available, timeout=900, retries=2),
 ]
 
