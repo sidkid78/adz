@@ -328,6 +328,9 @@ def parse_files(text: str) -> dict[str, str]:
     return files
 
 
+DB_TYPES_PATH = "src/lib/database.types.ts"
+
+
 class ChangesetAgent:
     """One build session for one ticket. Session continuity matters: the
     repair turn must remember the files it just wrote, so a compiler
@@ -349,16 +352,40 @@ class ChangesetAgent:
         return parse_files(interaction.output_text)
 
     def write(self, ticket: dict, contract: ChangesetContract,
-              repo_tree: list[str], dependency_context: str) -> dict[str, str]:
+              repo_tree: list[str], dependency_context: str,
+              api_surface: str = "") -> dict[str, str]:
         required = "\n".join(f"  {p}" for p in contract.required_paths)
         existing = "\n".join(f"  {p}" for p in repo_tree) or "  (none yet)"
+        # Listing the generated types under "already in the repo" is
+        # not enough on its own: an agent reads that as "a file exists"
+        # and still hand-writes its own Database interface beside it.
+        # The hand-written one omits postgrest's required
+        # `Relationships` key, every row silently becomes `never`, and
+        # the errors land in whatever file USES the client — nowhere
+        # near the cause.
+        db_types = DB_TYPES_PATH if DB_TYPES_PATH in repo_tree else ""
+        db_note = (
+            f"## Database types\nImport the Database type from "
+            f"`{db_types}` — import it as `@/lib/database.types`, which "
+            f"resolves from any directory, NOT a relative path — and "
+            f"parameterise every Supabase client with "
+            f"it (createClient<Database>, SupabaseClient<Database>). It "
+            f"was generated from the migrations. Do NOT declare your own "
+            f"Database or Tables interface — a hand-written one is missing "
+            f"keys postgrest requires and makes every row resolve to `never`.\n\n"
+        ) if db_types else ""
         return self._call(
             f"# Subtask: {ticket['title']}\n\n"
             f"## Intent\n{ticket.get('intent', '')}\n\n"
             f"## Expected output\n{ticket.get('output_format', '')}\n\n"
+            # Before the architecture, deliberately: when the two
+            # disagree about a library's API, the installed signatures are
+            # the ones the compiler will enforce.
+            f"{api_surface}"
             f"## Architecture to implement\n{ticket['architecture']}\n\n"
             f"## Already in the repo (import from these; do not redefine)\n{existing}\n\n"
             f"{dependency_context}"
+            f"{db_note}"
             f"## Files you must create\n{required}\n\n"
             f"Emit those files now, in the delimiter format."
         )

@@ -1,0 +1,18 @@
+role: postgresql_database_architecture_supabase_security
+total_runs: 6
+successes: 6
+failures: 0
+notes:
+- Always write robust SQL migrations with complete database schemas and corresponding
+  RLS policies.
+- Always create comprehensive Supabase database migrations with strict RLS policies
+  and storage bucket configurations in a single SQL file.
+- Always generate valid Supabase database migrations with complete table schemas,
+  foreign keys, and strict Row Level Security (RLS) policies.
+- Always define comprehensive RLS policies alongside database schemas to ensure strict
+  data security before deploying migrations.
+- Always verify table dependencies and enable RLS with explicit policies on all newly
+  created tables in database migrations.
+- Always write comprehensive RLS policies and indexes alongside your initial Supabase
+  schema migration to ensure security and performance from the start.
+last_updated: '2026-09-20T13:19:51.305603+00:00'

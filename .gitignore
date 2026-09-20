@@ -11,3 +11,6 @@ __pycache__/
 factory_workspace/
 factory_build.log
 factory_runs/
+
+# Playwright MCP scratch (snapshots, console logs)
+.playwright-mcp/

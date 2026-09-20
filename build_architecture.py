@@ -30,6 +30,7 @@ Usage:
 """
 
 import argparse
+import atexit
 import json
 import shutil
 import sys
@@ -46,6 +47,7 @@ try:
 except ImportError:
     pass
 
+from api_surface import api_surface_for
 from changesets import (
     SYSTEM_INSTRUCTION,
     ChangesetAgent,
@@ -54,6 +56,7 @@ from changesets import (
     validate_changeset,
 )
 from dependencies import (
+    extract_packages,
     missing_from,
     packages_for_architecture,
     verify_on_npm,
@@ -145,9 +148,17 @@ def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str
          "success_rate": round(expert.expertise.success_rate, 3)} if expert else None,
     )
 
+    # What the packages THIS ticket imports actually export. The
+    # architecture may target an older major version — it specified
+    # Inngest v3's 3-argument createFunction against an installed v4 —
+    # and without this the builder rewrites the same stale API on every
+    # retry, because the architecture keeps confirming it.
+    surface = api_surface_for(
+        repo.path, sorted(extract_packages(ticket.get("architecture", ""))),
+    )
     agent = ChangesetAgent(model=route["model"], system_instruction=system_instruction)
     files = agent.write(ticket, contract, repo.existing_paths(),
-                        dependency_context(repo, ticket, owners))
+                        dependency_context(repo, ticket, owners), surface)
 
     last_failure = "agent produced no parseable files"
     for attempt in range(1, route["max_attempts"] + 1):
@@ -340,6 +351,17 @@ def main() -> int:
               f"{len(owners)} file(s) total. Pass --build to run.")
         return 0
 
+    # One build per workspace. A previous run's agent threads can outlive
+    # the process that started them (a cancelled build kept writing files
+    # for another 30 seconds), and those writes land in a workspace the
+    # NEXT run has just scaffolded — where they get swept into the
+    # scaffold commit and fail a baseline gate nobody could explain.
+    ok, why = repo.acquire_lock()
+    if not ok:
+        print(f"REFUSING : {why}")
+        return 1
+    atexit.register(repo.release_lock)
+
     # Telemetry starts BEFORE the scaffold. It used to start after, which
     # meant a scaffold or baseline-gate failure produced no events at all
     # — and that is exactly the failure you most want recorded, because
@@ -421,6 +443,7 @@ def main() -> int:
 
     # ---- Build in dependency order -----------------------------------
     passed, failed = [], []
+    db_types_done = False
     for i, layer in enumerate(layers, 1):
         print(f"\n{'=' * 78}\nLAYER {i}\n{'=' * 78}")
         for tid in layer:
@@ -436,6 +459,35 @@ def main() -> int:
                                       log=log, layer=i)
             (passed if ok else failed).append(tid)
             print(f"    result   : {'PASSED' if ok else 'FAILED'} — {detail}")
+
+        # Once the migrations exist, let the DATABASE state the Database
+        # type. Agents hand-writing it omit postgrest's required
+        # `Relationships` key, which silently collapses every row to
+        # `never` and produces errors only at the use sites — a ticket
+        # burned five attempts on that, none of them in the file at
+        # fault. Generated here rather than at scaffold time because the
+        # migrations are a ticket's output, not the scaffold's.
+        if not db_types_done and not args.no_supabase and any(
+            owners.get(pth) in layer
+            for c in contracts.values() for pth in c.required_paths
+            if pth.startswith("supabase/migrations/")
+        ):
+            with log.timed("db types", phase="supabase gen types"):
+                started = repo.supabase_start()
+                gen = repo.generate_db_types() if started.passed else started
+            if gen.passed:
+                print(f"db types : OK — {gen.transcript}")
+            else:
+                # The whole transcript, not its last line: supabase
+                # ends every failure with "rerun with --debug",
+                # which is the one line that says nothing.
+                print(f"db types : SKIPPED — {gen.failed_command}")
+                print(f"    {gen.transcript[-600:]}")
+            log.log(f"db types: {'ok' if gen.passed else 'skipped'}")
+            # Not fatal. A ticket can still hand-write the type; it just
+            # no longer has to, and the failure is visible rather than
+            # showing up as ten `never` errors three tickets later.
+            db_types_done = gen.passed
 
     # ---- Integration gate, with repair --------------------------------
     print(f"\n{'=' * 78}\nINTEGRATION GATE (whole repo)\n{'=' * 78}")

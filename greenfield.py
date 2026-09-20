@@ -263,6 +263,22 @@ class GateResult:
     failed_command: str | None = None
 
 
+def _pid_alive(pid: int) -> bool:
+    """Is this PID still running? Used to reclaim a lock left by a build
+    that was killed before it could release one."""
+    if os.name == "nt":
+        out = subprocess.run(
+            ["tasklist", "/FI", f"PID eq {pid}", "/NH"],
+            capture_output=True, text=True, check=False,
+        )
+        return str(pid) in (out.stdout or "")
+    try:
+        os.kill(pid, 0)
+    except (ProcessLookupError, PermissionError):
+        return False
+    return True
+
+
 def force_wipe(path: Path, attempts: int = 3) -> list[str]:
     """Delete a directory tree, returning whatever could not be removed.
 
@@ -333,6 +349,44 @@ class TargetRepo:
     # ---- scaffolding -------------------------------------------------
     def exists(self) -> bool:
         return (self.path / "package.json").exists()
+
+    @property
+    def lock_path(self) -> Path:
+        return self.path.parent / f".{self.name}.build.lock"
+
+    def acquire_lock(self) -> tuple[bool, str]:
+        """Refuse to build a workspace another run is already writing to.
+
+        Stopping a background build kills the shell, not necessarily the
+        Python child. One that was still mid-ticket wrote its files into
+        a freshly scaffolded directory seconds after the wipe, and the
+        scaffold commit swept them in — the baseline gate then failed on
+        code no ticket in that run had produced.
+
+        A stale lock (the process is gone) is reclaimed rather than
+        blocking forever, since a killed build never gets to release it.
+        """
+        import os as _os
+
+        if self.lock_path.exists():
+            try:
+                pid = int(self.lock_path.read_text(encoding="utf-8").strip() or 0)
+            except (ValueError, OSError):
+                pid = 0
+            if pid and _pid_alive(pid) and pid != _os.getpid():
+                return False, (
+                    f"another build (pid {pid}) is using {self.path.name}. "
+                    f"Stop it, or delete {self.lock_path.name} if it is gone."
+                )
+        self.lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self.lock_path.write_text(str(_os.getpid()), encoding="utf-8", newline="\n")
+        return True, "lock acquired"
+
+    def release_lock(self) -> None:
+        try:
+            self.lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
 
     def scaffold(self, force: bool = False, install: bool = True,
                  extra_packages: list[str] | None = None) -> GateResult:
@@ -623,6 +677,86 @@ class TargetRepo:
         if proc.returncode != 0:
             return GateResult(False, output[-3000:], "supabase start")
         return GateResult(True, "supabase stack running")
+
+    DB_TYPES_PATH = "src/lib/database.types.ts"
+
+    def generate_db_types(self) -> GateResult:
+        """Generate src/lib/database.types.ts from the applied migrations.
+
+        WHY THIS IS THE SCAFFOLD'S JOB AND NOT A TICKET'S
+        -------------------------------------------------
+        Supabase's client is generic over a `Database` type, and without a
+        real one every row resolves to `never`. Left to themselves, agents
+        hand-write that type — and they write it subtly wrong, because
+        postgrest's `GenericTable` requires FOUR keys:
+
+            Row, Insert, Update, Relationships
+
+        A hand-written table declares the first three and omits
+        `Relationships`. That one omission means no table satisfies
+        `GenericTable`, so no schema satisfies `GenericSchema`, so the
+        client's schema parameter falls back and EVERY row becomes
+        `never`.
+
+        The compiler never says any of that. It reports
+        "Property 'id' does not exist on type 'never'" at each use site —
+        a pile of errors in the file that consumes the type, none in the
+        file that defines it. One ticket burned five attempts chasing
+        those symptoms in a route handler while the defect sat in a file
+        it had already finished writing.
+
+        So: don't ask an agent to reproduce a type the database can state
+        exactly. `supabase gen types` emits it with the right columns AND
+        the right shape, and the ticket imports it. This is the same rule
+        as Tailwind and the run scripts — anything a ticket cannot fix
+        (write_files refuses package.json; nothing lets it learn a private
+        postgrest constraint) belongs to the scaffold.
+
+        Needs the stack up and the migrations applied, so it runs after
+        the layer that owns supabase/migrations, not at scaffold time.
+        """
+        if not (self.path / "supabase" / "config.toml").exists():
+            return GateResult(False, "no supabase project", "gen types")
+
+        # `db reset` applies the migrations and THEN restarts containers
+        # and health-checks them. That last part fails on its own
+        # schedule — a refused socket on the storage API — long after the
+        # schema is in place, and it exits non-zero for it. Gating on
+        # that exit code threw away a perfectly good schema: the reset
+        # "failed", yet `gen types` immediately returned all 7 tables.
+        #
+        # So the reset is best-effort and the TYPES are the verdict. If
+        # the migrations really did not apply, gen types comes back with
+        # no tables and that is what fails here.
+        reset = _run(DB_RESET, self.path, timeout=900)
+        reset_out = (reset.stdout or "") + (reset.stderr or "")
+
+        proc = _run(["supabase", "gen", "types", "typescript", "--local"],
+                    self.path, timeout=300)
+        types = proc.stdout or ""
+        if proc.returncode != 0 or "export type Database" not in types:
+            detail = reset_out if reset.returncode != 0 else ""
+            return GateResult(False, (detail + types + (proc.stderr or ""))[-3000:],
+                              "supabase gen types")
+
+        # A schema with no tables means the migrations did not land,
+        # whatever the reset said. Writing that file would be worse than
+        # writing none: the builder would import a Database type that
+        # knows about nothing.
+        if "Relationships: [" not in types:
+            return GateResult(False, (reset_out + types)[-3000:],
+                              "supabase gen types (no tables)")
+
+        out = self.path / self.DB_TYPES_PATH
+        out.parent.mkdir(parents=True, exist_ok=True)
+        header = (
+            "// GENERATED by `supabase gen types typescript --local`.\n"
+            "// Do not edit, and do not hand-write a Database type beside it:\n"
+            "// this one carries the Relationships key postgrest requires.\n"
+        )
+        out.write_text(header + types, encoding="utf-8", newline="\n")
+        tables = types.count("Relationships: [")
+        return GateResult(True, f"{self.DB_TYPES_PATH}: {tables} table(s)")
 
     def supabase_stop(self) -> None:
         """Stop only THIS project's stack, by id. Never a bare
