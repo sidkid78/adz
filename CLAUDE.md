@@ -26,6 +26,16 @@ python build_architecture.py specs/pm-mcp-server.architecture.json --build
 python build_architecture.py specs/... --build --no-supabase   # skip the DB step
 python greenfield.py pm-mcp-server --force     # scaffold the target repo alone
 
+# Hands-off: watch orch2 and build finished architectures as they land
+python architecture_watcher.py                 # watch + build
+python architecture_watcher.py --plan-only     # import + report, never build
+python architecture_watcher.py --once <execution.json>   # one file, then exit
+
+# Observability
+python factory_telemetry.py --serve            # -> http://localhost:8777/dashboard.html
+python factory_telemetry.py                    # tail the latest run's events
+python reachability.py factory_workspace/<name>   # orphan check on its own
+
 # The document factory (kept; the right tool when the deliverable is prose)
 python run_factory.py --plan          # intake + routing for everything in specs/, zero API calls
 python run_factory.py                 # + author/validate/freeze per-ticket contracts
@@ -84,10 +94,16 @@ orch2 execution  ->  import_architecture.py   preserve dependencies, output_form
                  ->  commit, or revert and escalate
                  ->  integration gate         typecheck, vitest, `next build`,
                                               `next typegen` + route contracts,
-                                              `supabase db reset`; minutes, once
+                                              `deno check` (edge functions),
+                                              reachability, `supabase db reset`;
+                                              minutes, once
                  ->  blame + repair           map the failure to the ticket owning the
                                               file, reopen it, re-run the gate
 ```
+
+`architecture_watcher.py` closes the loop in front of this: it watches orch2's executions
+directory and runs the pipeline when a finished architecture lands. Every stage emits events to
+`factory_runs/<run_id>/events.jsonl` (`factory_telemetry.py`), which `dashboard.html` polls.
 
 **Two tsconfigs, on purpose.** Next generates route-contract types under `.next/types` and adds
 them to `include` in `tsconfig.json`; the `check:routes` step typechecks through that config.
@@ -117,6 +133,36 @@ that's PowerShell 5.1, where `&&` is a parser error. Split into separate scripts
 **`write_files` refuses anything outside `src/`, `tests/`, `supabase/`** *before* touching disk.
 `package.json` and `tsconfig.json` define what the gate means, so a changeset that edits them
 could change the verdict instead of satisfying it.
+
+**The gates verify code, not that the project is usable.** Four defects shipped through a fully
+green build for this reason: a missing `tsconfig.check.json`, twelve modules nothing imported,
+Tailwind never installed, and no `dev` script. Every one typechecked, built and tested.
+
+- **Reachability** (`reachability.py`) closes part of it. `pm-mcp-server` passed every gate and
+  served zero tools: seven tool modules and five prompt modules registered by import side effect
+  and nothing imported them. "Is this module reachable from an entry point" is a question no
+  compiler asks. It is the blind spot in first-writer-wins ownership — the DAG guarantees a
+  ticket's dependencies *exist*, never that its output is *consumed*.
+- **Toolchain is the scaffold's job, never a ticket's.** `write_files` refuses `package.json`, so
+  a ticket *cannot* add Tailwind, a run script or a tsconfig. Anything in that class belongs in
+  `greenfield.py`. When generated code assumes a tool (the frontend expert role is literally
+  `frontend_development_tailwind_next_js`), the scaffold must supply it.
+- **Fallback paths must land on real entry points.** `FORMAT_FALLBACK_PATHS` in `changesets.py`
+  once wrote Next components to `src/app/<ticket>.tsx` (not a route — App Router needs
+  `page.tsx` in a directory) and scripts to `src/<ticket>.ts` (nothing imports them). Both
+  typecheck; neither can run.
+
+**Infrastructure failures are not code failures.** `is_infra_failure()` in `greenfield.py`
+classifies a gate transcript as environment vs. code (refused sockets, 5xx, port conflicts,
+container errors, timeouts), and the repair loop refuses to blame a ticket for one. A transient
+`supabase db reset` failure once blamed four tickets and queued rewrites of correct code, purely
+because the CLI's output mentioned their file paths — worse than not checking, since it spends
+tokens to make good code different. `Step.retries` exists only for genuinely flaky steps and only
+fires when the failure classifies as infra; never retry a real gate failure into silence.
+
+**Verify a gate still bites after changing it.** Break something on purpose and confirm the
+failure. Excluding `.next` from the base tsconfig once made `next build` go green while a route
+still violated its contract — the gate stopped measuring rather than started passing.
 
 **Supabase ports are allocated, never assumed.** `allocate_supabase_ports()` asks Docker which
 ports are published and picks a free 100-block. Developers commonly have several Supabase
@@ -161,6 +207,17 @@ Module map:
   model to hallucinate over.
 - `artifact_kinds.py` / `ticket_contracts.py` / `artifact_agent.py` — kinds+checks, contracts, and
   the specialist builder. See the conventions below before changing any of them.
+- `architecture_watcher.py` — the front door for hands-off runs. Seeds existing executions as
+  *seen* on startup rather than backfilling them (orch2 has 50; "catching up" would launch 50
+  builds). Waits for size stability **and** a complete export before accepting a file, skips
+  architectures whose tickets yield no file contracts, caps plan size with `--max-tickets`,
+  serialises builds, and logs every decision to `factory_runs/watcher.jsonl`.
+- `factory_telemetry.py` + `dashboard.html` — one JSON object per event, `fsync`'d per line so a
+  crashed run still leaves a readable record. Telemetry must never fail a build: every emit is
+  wrapped and a dropped event is the worst case. `RunLog` starts **before** the scaffold, because
+  a scaffold or baseline failure is exactly the case you most want recorded.
+- `reachability.py` — walks the import graph from real framework entry points and fails on files
+  the factory built that nothing imports. See the conventions below.
 
 ## Conventions that matter here
 

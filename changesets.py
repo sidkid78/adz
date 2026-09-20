@@ -54,17 +54,42 @@ FORMAT_EXTENSIONS = {
     "code": (".ts", ".tsx", ".sql"),
 }
 
+# Roots an architecture writes paths under. Next.js documents routinely
+# say "lib/supabase/client.ts" or "components/Foo.tsx" meaning src/lib/…
+# and src/components/…, so those are recognised and normalised below.
+_PATH_ROOTS = (
+    "src|tests|supabase|lib|utils|components|hooks|app|types|logic|prompts|tools|scripts"
+)
+
 # Alternation order matters: `ts` before `tsx` matches the first three
 # characters of "page.tsx" and stops, silently yielding "page.ts" — a
 # path that does not exist. Longest extension first.
-_PATH_RE = re.compile(r"((?:src|tests|supabase)/[A-Za-z0-9_\-./\[\]]+\.(?:tsx|ts|sql))")
+#
+# The lookbehind is load-bearing. Without it the pattern matches the TAIL
+# of a longer path: "lib/supabase/client.ts" yielded "supabase/client.ts",
+# which put application code in the edge-function directory, outside
+# tsconfig's include, where nothing would ever typecheck it.
+_PATH_RE = re.compile(
+    r"(?<![A-Za-z0-9_./-])((?:" + _PATH_ROOTS + r")/[A-Za-z0-9_\-./\[\]]+\.(?:tsx|ts|sql))"
+)
+
+
+def normalize_path(path: str) -> str:
+    """Put a recognised-but-unrooted path where this scaffold keeps it.
+
+    `supabase/` is left alone — migrations and edge functions genuinely
+    live at the repo root. Everything else is application source and
+    belongs under `src/`, which is what tsconfig includes."""
+    if path.startswith(("src/", "tests/", "supabase/")):
+        return path
+    return f"src/{path}"
 
 # Many documents put the path in a header comment on the first line of
 # the code itself (`// src/types/dashboard.ts`) rather than in the prose
 # above it. That is the strongest ownership signal available: the file
 # is naming itself.
 _SELF_NAMING_RE = re.compile(
-    r"\A\s*(?://|--|/\*|#)\s*((?:src|tests|supabase)/[A-Za-z0-9_\-./\[\]]+\.(?:tsx|ts|sql))"
+    r"\A\s*(?://|--|/\*|#)\s*((?:" + _PATH_ROOTS + r")/[A-Za-z0-9_\-./\[\]]+\.(?:tsx|ts|sql))"
 )
 _FENCE_RE = re.compile(r"^```[a-zA-Z0-9_+-]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
 
@@ -139,12 +164,12 @@ def extract_owned_paths(architecture: str) -> list[str]:
         # prose: the file is declaring its own location.
         self_named = _SELF_NAMING_RE.match(body)
         if self_named:
-            path = self_named.group(1)
+            path = normalize_path(self_named.group(1))
         else:
             matches = _PATH_RE.findall(section)
             if not matches:
                 continue
-            path = matches[-1]  # the mention closest to the code wins
+            path = normalize_path(matches[-1])  # mention closest to the code wins
 
         if path not in owned:
             owned.append(path)
