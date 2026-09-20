@@ -257,7 +257,52 @@ def validate_changeset(contract: ChangesetContract, repo, written: list[str]) ->
     if broken:
         return False, broken
 
+    silenced = casts_to_never(repo, written)
+    if silenced:
+        return False, silenced
+
     return True, f"{len(contract.required_paths)} required file(s) present"
+
+
+_NEVER_CAST = re.compile(r"as\s+(?:unknown\s+as\s+)?never\b")
+
+
+def casts_to_never(repo, written: list[str]) -> str | None:
+    """`as unknown as never` — the compiler silenced, not satisfied.
+
+    Caught in the wild: a ticket inherited a Database type whose tables
+    resolved to `never`, and rather than fix the type it cast the insert
+    payload TO never:
+
+        } as unknown as never)
+
+    That compiles. It also removes every check on the insert, and
+    commits the next ticket to the same cast, because the type is still
+    broken. The gate went green on a repo that was worse than when the
+    errors were visible.
+
+    There is no legitimate reason to cast a value TO `never`. `never`
+    is the type with no values; asserting something is one is a
+    statement that the code is unreachable, which an insert payload is
+    not. Unlike `any` — which is sometimes a reasonable escape hatch at
+    a boundary — this is only ever a way to stop the compiler talking.
+    """
+    for path in written:
+        if not path.endswith((".ts", ".tsx")):
+            continue
+        content = repo.read_file(path) or ""
+        for i, line in enumerate(content.splitlines(), 1):
+            if _NEVER_CAST.search(line):
+                return (
+                    f"{path}:{i} casts a value to `never`: {line.strip()[:90]}\n"
+                    f"That silences the compiler instead of fixing the type. "
+                    f"`never` has no values, so asserting one exists removes "
+                    f"every check at that site and leaves the underlying type "
+                    f"wrong for whatever touches it next. Fix the type it is "
+                    f"fighting — most often a Supabase Database declaration "
+                    f"missing its `Relationships` key."
+                )
+    return None
 
 
 def incomplete_database_types(repo, written: list[str]) -> str | None:
