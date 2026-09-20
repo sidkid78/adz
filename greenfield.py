@@ -457,12 +457,60 @@ class TargetRepo:
         if install:
             transcript.append("== npm install ==")
             proc = _run(["npm", "install", "--no-audit", "--no-fund"], self.path, timeout=900)
-            transcript.append(((proc.stdout or "") + (proc.stderr or "")).strip()[-3000:])
+            output = ((proc.stdout or "") + (proc.stderr or "")).strip()
+            transcript.append(output[-3000:])
             if proc.returncode != 0:
-                return GateResult(False, "\n".join(transcript), "npm install")
+                # A peer conflict is a THIRD failure class: not code — no
+                # agent has written anything yet — and not infrastructure,
+                # since the registry is fine. The architecture asked for a
+                # package that has not caught up to the toolchain, and
+                # retrying changes nothing.
+                #
+                # A scoped `overrides` block resolves it without
+                # downgrading the pin the owner keeps current for security,
+                # and without --legacy-peer-deps switching peer checking
+                # off for the whole tree. Whether the forced combination
+                # actually WORKS is a different question, and the runtime
+                # proof is what answers it.
+                resolved = self._apply_overrides(output)
+                if resolved:
+                    transcript.append(f"== peer conflict resolved via overrides: {resolved} ==")
+                    proc = _run(["npm", "install", "--no-audit", "--no-fund"],
+                                self.path, timeout=900)
+                    transcript.append(((proc.stdout or "") + (proc.stderr or "")).strip()[-3000:])
+                if proc.returncode != 0:
+                    from dependencies import explain_eresolve
+                    why = explain_eresolve(output)
+                    if why:
+                        transcript.append(f"DIAGNOSIS: {why}")
+                    return GateResult(False, "\n".join(transcript), "npm install")
 
         self.commit("chore: scaffold project skeleton")
         return GateResult(True, "\n".join(transcript))
+
+    def _apply_overrides(self, install_output: str) -> str | None:
+        """Merge a scoped npm `overrides` block into package.json.
+
+        Returns a description of what was added, or None when nothing
+        applied — including when the same block is already present,
+        which is what stops a failing install from looping.
+        """
+        from dependencies import overrides_for_conflict
+        block = overrides_for_conflict(install_output)
+        if not block:
+            return None
+        manifest = self.path / "package.json"
+        try:
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return None
+        existing = data.setdefault("overrides", {})
+        if all(existing.get(k) == v for k, v in block.items()):
+            return None
+        existing.update(block)
+        manifest.write_text(json.dumps(data, indent=2) + "\n",
+                            encoding="utf-8", newline="\n")
+        return ", ".join(block)
 
     def install_packages(self, names: list[str], timeout: int = 900) -> GateResult:
         """Install packages the architecture imports but the scaffold lacks.

@@ -49,6 +49,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+# Uncaught browser exceptions collected during the screenshot pass.
+_PAGE_ERRORS: list[str] = []
+
 READY_TIMEOUT = 120          # seconds to wait for the server to answer at all
 REQUEST_TIMEOUT = 15
 
@@ -146,7 +149,14 @@ def check_routes(repo_path: Path, routes: tuple[str, ...] = ("/",),
                 # the route exists, the page is blank.
                 failures.append(f"{route} returned 200 but only {len(body.strip())} bytes of HTML")
 
+        _PAGE_ERRORS.clear()
         shot = _screenshot(repo_path, base) if screenshot and not failures else ""
+        # A page that renders but throws is not working. React
+        # reconciler crashes from a forced peer resolution land
+        # here and nowhere else.
+        if _PAGE_ERRORS:
+            unique = list(dict.fromkeys(_PAGE_ERRORS))[:5]
+            failures.extend(f"uncaught browser error: {e}" for e in unique)
 
         if failures:
             return False, "\n".join(log + [""] + failures)
@@ -177,6 +187,15 @@ def _screenshot(repo_path: Path, base: str) -> str:
             browser = p.chromium.launch()
             try:
                 page = browser.new_page(viewport={"width": 1440, "height": 900})
+                # An uncaught exception is how a forced dependency
+                # resolution actually shows up. `overrides` can make a
+                # peer conflict install cleanly, and if the version
+                # really is incompatible React throws in the reconciler
+                # — while the server still returns 200 and a shell that
+                # a status check and a body-size check both accept.
+                page.on("pageerror", lambda e: _PAGE_ERRORS.append(str(e)[:300]))
+                page.on("console", lambda m: _PAGE_ERRORS.append(f"console.error: {m.text[:300]}")
+                        if m.type == "error" else None)
                 page.goto(base + "/", wait_until="load", timeout=60000)
                 # Client components hydrate after load; a screenshot taken
                 # at `load` can catch a skeleton and report it as a blank

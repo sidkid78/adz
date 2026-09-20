@@ -253,7 +253,53 @@ def validate_changeset(contract: ChangesetContract, repo, written: list[str]) ->
     if stray:
         return False, f"wrote outside permitted roots: {', '.join(stray)}"
 
+    broken = incomplete_database_types(repo, written)
+    if broken:
+        return False, broken
+
     return True, f"{len(contract.required_paths)} required file(s) present"
+
+
+def incomplete_database_types(repo, written: list[str]) -> str | None:
+    """A hand-written Supabase `Database` type missing `Relationships`.
+
+    postgrest's GenericTable requires FOUR keys — Row, Insert, Update
+    and Relationships. Omit the fourth and no table satisfies
+    GenericTable, no schema satisfies GenericSchema, the client's schema
+    parameter falls back, and EVERY row resolves to `never`.
+
+    The compiler never says that. It reports "Property 'id' does not
+    exist on type 'never'" at each USE site, so the errors appear in the
+    route handlers while the defect sits in a types file that already
+    passed its own gate. One ticket burned five attempts rewriting a
+    route; another hand-wrote eleven tables without a single
+    Relationships key and failed the same way two layers later.
+
+    Generating the type from the migrations is the better fix, and this
+    factory does that — when the architecture asks for a migration. This
+    one did not, so there was nothing to generate FROM and the defect
+    came back by another road. Hence a check at the definition: cheap,
+    deterministic, and it names the file that is actually wrong.
+    """
+    for path in written:
+        if not path.endswith((".ts", ".tsx")):
+            continue
+        content = repo.read_file(path) or ""
+        if "Tables:" not in content or "Row:" not in content:
+            continue
+        tables = len(re.findall(r"^\s{4,}\w+:\s*\{\s*$", content, re.MULTILINE))
+        if "Relationships" in content or tables == 0:
+            continue
+        return (
+            f"{path} declares a Supabase Database type with Row/Insert/Update "
+            f"but no `Relationships` key. postgrest's GenericTable requires "
+            f"all four, so every table silently fails to match and EVERY row "
+            f"resolves to `never` — reported later as \"Property 'x' does not "
+            f"exist on type 'never'\" in whatever queries it, not here. "
+            f"Add `Relationships: []` to each table (or real foreign-key "
+            f"entries), or import the generated type instead of writing one."
+        )
+    return None
 
 
 # ---- The builder -----------------------------------------------------

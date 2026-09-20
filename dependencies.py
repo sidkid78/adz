@@ -173,6 +173,80 @@ def types_for(names: list[str], timeout: int = 60) -> list[str]:
     return wanted
 
 
+def explain_eresolve(output: str) -> str | None:
+    """Turn an ERESOLVE wall into the one sentence that matters.
+
+    npm reports a peer conflict in about twenty-five lines of tree, and
+    the factory printed all of them. The useful content is three facts:
+    what is installed, what wanted something else, and what range it
+    wanted.
+
+    This is a THIRD failure class, distinct from the two the factory
+    already knows. It is not a code failure — no agent wrote anything
+    yet. It is not an infrastructure failure — the network and the
+    registry are fine. The architecture asked for packages that cannot
+    coexist with the toolchain, and no number of retries changes that.
+    """
+    if "ERESOLVE" not in output:
+        return None
+    found = re.search(r"Found:\s*(\S+)", output)
+    # The conflict is the peer line AFTER "Could not resolve dependency:".
+    # Matching the first peer line in the whole log finds a constraint
+    # that is satisfied and names the wrong package — here it blamed
+    # drei@^19, which was fine, instead of fiber's ">=19 <19.3".
+    tail = output.split("Could not resolve dependency:", 1)
+    scope = tail[1] if len(tail) > 1 else output
+    peer = re.search(r"peer\s+(\S+?)@\"([^\"]+)\"\s+from\s+(\S+)", scope)
+    if not (found and peer):
+        return "npm could not resolve a dependency tree (ERESOLVE)"
+    package, wanted, requester = peer.group(1), peer.group(2), peer.group(3)
+    return (f"dependency conflict: {requester} requires {package}@{wanted}, "
+            f"but the scaffold installs {found.group(1)}. "
+            f"The architecture's packages have not caught up to the toolchain "
+            f"version this factory pins.")
+
+
+def overrides_for_conflict(output: str) -> dict | None:
+    """A scoped npm `overrides` block that resolves an ERESOLVE, or None.
+
+    Three ways out of a peer conflict, and only one is honest:
+
+      --legacy-peer-deps   turns peer checking off for the WHOLE tree, so
+                           the next genuine conflict is silent too.
+      downgrade the pin    the owner keeps React and Next current on
+                           purpose, for security. Walking that back to
+                           satisfy a view library trades a CVE for a
+                           convenience.
+      overrides            tells npm that THIS package may use the
+                           version the root project already installs.
+                           Scoped to one dependency, visible in
+                           package.json, and reversible when upstream
+                           catches up.
+
+    `$react` is npm's own syntax for "whatever the root project
+    resolved", so the override cannot drift away from the real pin.
+
+    This resolves the INSTALL. It does not promise the combination
+    works — a peer range usually reflects a real incompatibility, and
+    forcing it can produce a tree that installs and then white-screens.
+    That is what the runtime proof and the console-error check are for.
+    """
+    if "ERESOLVE" not in output:
+        return None
+    tail = output.split("Could not resolve dependency:", 1)
+    scope = tail[1] if len(tail) > 1 else output
+    peer = re.search(r"peer\s+(\S+?)@\"[^\"]+\"\s+from\s+(\S+?)@\S+", scope)
+    if not peer:
+        return None
+    wanted, requester = peer.group(1), peer.group(2)
+    # react-dom moves with react; overriding one without the other just
+    # relocates the same conflict.
+    pinned = {wanted: f"${wanted}"}
+    if wanted == "react":
+        pinned["react-dom"] = "$react-dom"
+    return {requester: pinned}
+
+
 def missing_from(repo_path: Path, names: list[str]) -> list[str]:
     """Drop anything the scaffold already declares, so a re-run is cheap."""
     import json
