@@ -32,6 +32,7 @@ Usage:
 import argparse
 import atexit
 import json
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -124,6 +125,28 @@ def dependency_context(repo: TargetRepo, ticket: dict, owners: dict[str, str]) -
     )
 
 
+_ERROR_LINE = re.compile(r"error [A-Z]*\d+|^\s*[✗×]\s|FAIL\s", re.MULTILINE)
+
+
+def failure_fingerprint(transcript: str) -> frozenset[str]:
+    """What the gate objected to, with line numbers stripped.
+
+    Attempts that differ only in where the errors sit are not progress.
+    ai_video_pipeline produced ten errors on attempt 1, ten on attempt 2
+    and ten on attempt 3 — the same ten, shifted by a line — and then
+    burned its remaining attempts before escalating. Comparing raw
+    transcripts would call those three different; comparing this calls
+    them identical, which is the truth worth acting on.
+    """
+    out = set()
+    for line in transcript.splitlines():
+        if not _ERROR_LINE.search(line):
+            continue
+        # src/x.ts(12,5): error TS2554  ->  src/x.ts: error TS2554
+        out.add(re.sub(r"\(\d+,\d+\)", "", line).strip()[:200])
+    return frozenset(out)
+
+
 def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str],
                  verbose: bool = False, log=None, layer: int = 0) -> tuple[bool, str]:
     import time as _time
@@ -162,6 +185,7 @@ def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str
                         dependency_context(repo, ticket, owners), surface)
 
     last_failure = "agent produced no parseable files"
+    seen_failures: list[frozenset[str]] = []
     for attempt in range(1, route["max_attempts"] + 1):
         attempt_started = _time.time()
         if not files:
@@ -192,6 +216,21 @@ def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str
                 return True, f"{len(written)} files"
             last_failure = gate.transcript
             print(f"    attempt {attempt}: gate FAILED ({gate.failed_command})")
+            # Stop when the attempts stop moving. Two identical failure
+            # sets in a row means the agent cannot see the cause from
+            # what it is being shown, and the remaining attempts will
+            # produce the same transcript at a different line number.
+            # Escalating early is not giving up: it is declining to pay
+            # three more times for the same answer.
+            fingerprint = failure_fingerprint(gate.transcript)
+            if fingerprint and seen_failures and fingerprint == seen_failures[-1]:
+                print(f"    attempt {attempt}: no progress since attempt "
+                      f"{attempt - 1} ({len(fingerprint)} identical failures) — escalating")
+                log.attempt_end(ticket["id"], attempt, "no_progress",
+                                stage=gate.failed_command,
+                                duration=round(_time.time() - attempt_started, 2))
+                break
+            seen_failures.append(fingerprint)
             log.attempt_end(ticket["id"], attempt, "gate_fail", stage=gate.failed_command,
                             duration=round(_time.time() - attempt_started, 2),
                             files_written=len(written))

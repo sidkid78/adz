@@ -915,6 +915,37 @@ def _deno_available(repo: "TargetRepo") -> tuple[bool, str]:
     return True, f"{len(edge_function_files(repo))} edge function file(s)"
 
 
+def assert_tests_ran(output: str) -> str | None:
+    """Fail a green test run that ran no tests.
+
+    `--passWithNoTests` is in the scaffold on purpose: the BASELINE gate
+    runs before any ticket has written a test, and a red baseline would
+    make the first ticket inherit a failure it did not cause. The flag is
+    right there and wrong here.
+
+    By integration time every ticket has landed, so a suite that ran zero
+    tests is not a pass — it is a gate that stopped measuring. This repo
+    reached that state: a repair deleted the last test file because it
+    imported a module being removed, and vitest stayed green over an
+    empty directory for the rest of the run.
+
+    Reads the count out of the runner's own summary rather than trusting
+    the exit code, which only ever meant "nothing failed".
+    """
+    # vitest: "Tests  5 passed (5)"  |  "No test files found"
+    counted = re.search(r"^\s*Tests\s+.*?\((\d+)\)", output, re.MULTILINE)
+    if counted:
+        return None if int(counted.group(1)) > 0 else "the suite ran 0 tests"
+    if re.search(r"No test (files )?found", output, re.IGNORECASE):
+        return ("the suite ran 0 tests — --passWithNoTests turned an empty "
+                "tests/ directory into a green gate")
+    # Some runners print only a file summary. Accept a positive one.
+    files = re.search(r"^\s*Test Files\s+.*?\((\d+)\)", output, re.MULTILINE)
+    if files and int(files.group(1)) == 0:
+        return "no test files ran"
+    return None
+
+
 @dataclass
 class Step:
     """An integration step plus how to tell whether it can run at all.
@@ -931,6 +962,15 @@ class Step:
     # rather than the code. Only ever set it where that is actually true;
     # retrying a real gate failure just hides it.
     retries: int = 0
+    # An exit code says "nothing failed". It does not say "something was
+    # checked". `vitest --passWithNoTests` exits 0 over an empty
+    # directory, and this repo shipped exactly that: an agent deleted the
+    # last test file and the suite stayed green while verifying nothing.
+    #
+    # Given the step's output, return an error string to fail it despite
+    # exit 0, or None to accept. This is the difference between reading
+    # a return code and reading the log.
+    assert_output: "Callable[[str], str | None] | None" = None
 
     def resolve(self, repo: "TargetRepo") -> list[str]:
         """Static commands pass through; callables are given the repo.
@@ -966,7 +1006,8 @@ def _supabase_available(repo: "TargetRepo") -> tuple[bool, str]:
 
 INTEGRATION_STEPS = [
     Step("typecheck", TYPECHECK, lambda r: (True, "always"), timeout=600),
-    Step("tests", TEST, lambda r: (True, "always"), timeout=600),
+    Step("tests", TEST, lambda r: (True, "always"), timeout=600,
+         assert_output=assert_tests_ran),
     Step("next build", NEXT_BUILD, _next_available, timeout=900),
     Step("route typegen", ROUTE_TYPEGEN, _next_available, timeout=600),
     # Supabase Edge Functions are Deno, not Node: they live outside
@@ -1092,6 +1133,13 @@ def run_integration(repo: "TargetRepo", steps: list[Step] | None = None,
             transcript.append(f"-- infra failure, retry {attempt + 1}/{step.retries} --")
             time.sleep(5)
             result = repo.run_gate([step.resolve(repo)], timeout=step.timeout)
+        # Exit code 0 is necessary, not sufficient.
+        if result.passed and step.assert_output:
+            complaint = step.assert_output(result.transcript)
+            if complaint:
+                result = GateResult(False,
+                                    result.transcript + f"\n\nGATE VACUOUS: {complaint}",
+                                    step.name)
         elapsed = round(time.time() - step_started, 2)
         transcript.append(result.transcript[-6000:])
         ran.append(step.name)
