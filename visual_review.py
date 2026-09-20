@@ -49,6 +49,7 @@ cover.
 """
 
 import base64
+import html
 import json
 import os
 import re
@@ -94,6 +95,9 @@ Reply with a single JSON object and nothing else:
    {"severity": "CRITICAL" | "WARNING",
     "defect": "CONTRAST | OVERLAP | TRUNCATION | MISSING | UNSTYLED | LAYOUT",
     "description": "what is wrong, and where on the page",
+    "visible_text": "the exact on-screen text nearest the defect, copied
+                     character for character, or an empty string if the
+                     defect is page-wide or has no text near it",
     "hint": "what to change"}
  ]}
 
@@ -106,6 +110,7 @@ class VisualReview:
     status: str = "SKIPPED"
     summary: str = ""
     findings: list[dict] = field(default_factory=list)
+    sources: list[str] = field(default_factory=list)
     raw: str = ""
 
     @property
@@ -126,6 +131,12 @@ class VisualReview:
                          f"{f.get('description', '')}")
             if f.get("hint"):
                 lines.append(f"      fix: {f['hint']}")
+        for path in self.sources:
+            # Plain "Source File:" form on purpose: blame_tickets matches
+            # any owned path appearing in the failure text, so naming the
+            # file here routes a visual defect to a ticket exactly the
+            # way a compiler error does, with no change to the router.
+            lines.append(f"  Source File: {path}")
         return "\n".join(lines)
 
 
@@ -199,6 +210,77 @@ def review_screenshot(image_path: Path, intent: str,
     )
 
 
+def _normalise(text: str) -> str:
+    """Compare rendered text to JSX source text.
+
+    A screenshot shows "You're All Caught Up!"; the source says
+    "You&apos;re All Caught Up!" because JSX escapes the apostrophe.
+    An exact substring match misses every string containing one, which
+    is most user-facing copy. Unescape entities, flatten smart quotes,
+    collapse whitespace, and compare case-insensitively.
+    """
+    out = html.unescape(text)
+    out = out.replace("’", "'").replace("‘", "'")
+    out = out.replace("“", '"').replace("”", '"')
+    return re.sub(r"\s+", " ", out).strip().lower()
+
+
+def attribute(repo_path: Path, review: "VisualReview") -> list[str]:
+    """Source files a visual finding is plausibly about.
+
+    A compiler names the file it is complaining about; a screenshot does
+    not. `blame_tickets` matches paths in the failure text, so a visual
+    failure resolves to nobody and the repair loop stops with "no ticket
+    owns a file named in the failure".
+
+    Two cheap routes back to source, neither needing the reviewer to
+    read code:
+
+    1. The defect's visible text. Generated UIs are full of literal
+       strings, so "You're All Caught Up!" greps straight to the
+       component that renders it. Exact, and free when it hits.
+
+    2. The route's entry point. Whatever else is wrong, the page
+       composed what is on screen, and its owner is the ticket that
+       chose what to render. This always resolves, so a finding is never
+       left unattributable.
+
+    (The exact method — a JSX transform stamping data-source-file onto
+    every element, then document.elementFromPoint at the defect's
+    coordinates — needs annotations that exist only in a dev build,
+    while the runtime proof deliberately serves the production one.)
+    """
+    found: list[str] = []
+    src_root = repo_path / "src"
+    sources = [f for f in src_root.rglob("*")
+               if f.is_file() and f.suffix in (".tsx", ".ts")] if src_root.is_dir() else []
+
+    for finding in review.findings:
+        text = str(finding.get("visible_text") or "").strip()
+        if len(text) < 4:
+            continue
+        needle = _normalise(text)
+        if len(needle) < 4:
+            continue
+        for src in sources:
+            try:
+                haystack = _normalise(src.read_text(encoding="utf-8", errors="replace"))
+            except OSError:
+                continue
+            if needle in haystack:
+                rel = src.relative_to(repo_path).as_posix()
+                if rel not in found:
+                    found.append(rel)
+                break
+
+    for candidate in ("src/app/page.tsx", "src/app/page.ts", "src/app/layout.tsx"):
+        if (repo_path / candidate).exists():
+            if candidate not in found:
+                found.append(candidate)
+            break
+    return found
+
+
 def review_repo(repo_path: Path, intent: str = "", model: str = VISION_MODEL) -> VisualReview:
     """Review the proof-of-work screenshot runtime_proof.py leaves behind."""
     shot = repo_path / "artifacts" / "proof-of-work.png"
@@ -208,7 +290,10 @@ def review_repo(repo_path: Path, intent: str = "", model: str = VISION_MODEL) ->
         readme = repo_path / "README.md"
         intent = readme.read_text(encoding="utf-8", errors="replace")[:1500] if readme.exists() \
             else "a working web application home page"
-    return review_screenshot(shot, intent, model=model)
+    result = review_screenshot(shot, intent, model=model)
+    if result.findings:
+        result.sources = attribute(repo_path, result)
+    return result
 
 
 if __name__ == "__main__":
