@@ -228,8 +228,20 @@ def _extension_ok(path: str, output_format: str) -> bool:
 def contract_for_ticket(ticket: dict, gate: list[list[str]],
                         already_owned: set[str]) -> ChangesetContract:
     """Derive a changeset contract, deterministically. Raises
-    ChangesetError when the ticket specifies no files of its own."""
-    candidates = extract_owned_paths(ticket["architecture"])
+    ChangesetError when the ticket specifies no files of its own.
+
+    A DECLARED file list wins over anything scraped from the prose.
+    orch2's planner schema now carries `files`, and a path stated as data
+    cannot be missed the way a path mentioned in a sentence can: a bare
+    `20250228000001_core.sql` in the prose was dropped by the path regex,
+    and the consequences ran five deep before anything named the cause.
+
+    Scraping stays as the fallback, because every architecture written
+    before the schema gained that field still has to build.
+    """
+    declared = [normalize_path(p.strip().replace("\\", "/"))
+                for p in (ticket.get("files") or []) if isinstance(p, str) and p.strip()]
+    candidates = declared or extract_owned_paths(ticket["architecture"])
 
     kept, rejected = [], []
     for path in candidates:

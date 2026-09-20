@@ -79,6 +79,16 @@ def load_architecture(path: Path) -> dict:
             "output_format": meta.get("output_format") or spec.get("output_format") or "",
             "dependencies": list(spec.get("dependencies", [])),
             "priority": spec.get("priority", 99),
+            # Paths the planner DECLARED, when it did. A path stated as
+            # data cannot be missed the way one mentioned in prose can —
+            # a bare migration filename was dropped by the path regex and
+            # cost five downstream symptoms before the cause was found.
+            # Absent on older exports, where scraping still applies.
+            "files": list(meta.get("files") or spec.get("files") or []),
+            # The functional position this subtask fills, when it competes
+            # for one. Two tickets claiming the same slot are building the
+            # same component; only one can be wired in.
+            "target_slot": meta.get("target_slot") or spec.get("target_slot") or "",
             # The worker's full output: the technical content to build from.
             "architecture": step.get("content", ""),
             # The planner's framing of what this subtask is for.
