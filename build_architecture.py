@@ -56,6 +56,7 @@ from changesets import (
     contract_for_ticket,
     validate_changeset,
 )
+from cost import Ledger
 from dependencies import (
     extract_packages,
     missing_from,
@@ -148,7 +149,8 @@ def failure_fingerprint(transcript: str) -> frozenset[str]:
 
 
 def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str],
-                 verbose: bool = False, log=None, layer: int = 0) -> tuple[bool, str]:
+                 verbose: bool = False, log=None, layer: int = 0,
+                 ledger: "Ledger | None" = None) -> tuple[bool, str]:
     import time as _time
     log = log or NullRunLog()
     ticket_started = _time.time()
@@ -188,6 +190,12 @@ def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str
     seen_failures: list[frozenset[str]] = []
     for attempt in range(1, route["max_attempts"] + 1):
         attempt_started = _time.time()
+        # The call that produced `files` has already happened — either
+        # agent.write() before the loop or agent.repair() at the end of
+        # the previous turn — so its usage belongs to THIS attempt.
+        if ledger is not None and getattr(agent, "last_usage", None):
+            ledger.record(ticket["id"], attempt,
+                          "build" if attempt == 1 else "repair", agent.last_usage)
         if not files:
             print(f"    attempt {attempt}: no files parsed from response")
             log.attempt_end(ticket["id"], attempt, "no_files",
@@ -496,6 +504,7 @@ def main() -> int:
     # ---- Build in dependency order -----------------------------------
     passed, failed = [], []
     db_types_done = False
+    ledger = Ledger()
     for i, layer in enumerate(layers, 1):
         print(f"\n{'=' * 78}\nLAYER {i}\n{'=' * 78}")
         for tid in layer:
@@ -508,7 +517,8 @@ def main() -> int:
             print(f"\n[{tid}] {ticket['title']}")
             print(f"    files    : {', '.join(contract.required_paths)}")
             ok, detail = build_ticket(repo, ticket, contract, owners, args.verbose,
-                                      log=log, layer=i)
+                                      log=log, layer=i, ledger=ledger)
+            ledger.settle(tid, ok)
             (passed if ok else failed).append(tid)
             print(f"    result   : {'PASSED' if ok else 'FAILED'} — {detail}")
 
@@ -593,6 +603,9 @@ def main() -> int:
         print(f"REPAIRED : {', '.join(repairs)}")
     print(f"REPO     : {repo.path}")
     print(f"COMMITS  :\n{repo.log(12)}")
+    print(ledger.report())
+    ledger.write(REPO_ROOT / "factory_runs" / log.run_id / "cost.json"
+                 if not args.no_telemetry else REPO_ROOT / "factory_runs" / "last_cost.json")
     log.run_end(passed, failed, repairs, integration.passed, integration.summary())
     if not args.no_telemetry:
         print(f"TELEMETRY: {log.events_path.relative_to(REPO_ROOT)}")

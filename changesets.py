@@ -343,12 +343,23 @@ class ChangesetAgent:
             model=model, input=system_instruction or SYSTEM_INSTRUCTION,
         )
         self._last = interaction.id
+        self.last_usage = None
 
     def _call(self, text: str) -> dict[str, str]:
         interaction = self.client.interactions.create(
             model=self.model, input=text, previous_interaction_id=self._last,
         )
         self._last = interaction.id
+        # Every model call in a build passes through here, so this is the
+        # one place usage can be captured without threading a ledger
+        # through every method. The caller reads it and knows which
+        # ticket and attempt it belonged to; this class deliberately
+        # does not.
+        try:
+            from cost import Usage
+            self.last_usage = Usage.from_interaction(interaction, self.model)
+        except Exception:  # noqa: BLE001,S110 - accounting never fails a build
+            pass
         return parse_files(interaction.output_text)
 
     def write(self, ticket: dict, contract: ChangesetContract,
