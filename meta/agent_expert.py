@@ -74,7 +74,7 @@ class AgentExpert:
             f"Lessons from past runs — apply these:\n{notes_block}"
         )
 
-    def run(self, task: str, model: str = "gemini-3.6-flash") -> str:
+    def run(self, task: str, model: str = "gemini-3.8-flash") -> str:
         interaction = self.client.interactions.create(
             model=model,
             system_instruction=self._system_prompt_with_expertise(),
@@ -82,7 +82,7 @@ class AgentExpert:
         )
         return interaction.output_text.strip()
 
-    def run_sandboxed(self, task: str, sbx, cwd: str, hook_bus, model: str = "gemini-3.6-flash") -> str:
+    def run_sandboxed(self, task: str, sbx, cwd: str, hook_bus, model: str = "gemini-3.8-flash") -> str:
         """Same tool-calling loop as SandboxedHookedAgent (write_file /
         run_shell_command, hooks fired at the same points) — this method
         adds nothing new to that loop except swapping in the expertise-

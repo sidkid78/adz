@@ -1,0 +1,8 @@
+role: full_stack_next_js_app_router_api_design
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Implement Next.js App Router streaming and execution pipelines using proper response
+  headers, async iterators, and robust Supabase server-side client integrations.
+last_updated: '2026-09-20T19:09:32.672319+00:00'

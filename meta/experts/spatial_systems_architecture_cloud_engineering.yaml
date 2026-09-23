@@ -1,0 +1,8 @@
+role: spatial_systems_architecture_cloud_engineering
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Maintain consistent spatial contract types across server endpoints, hooks, and agent
+  definitions to ensure reliable scene synchronization.
+last_updated: '2026-09-20T19:00:57.228257+00:00'

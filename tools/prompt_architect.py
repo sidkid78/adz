@@ -196,7 +196,7 @@ class PromptArchitect:
     """
 
     PRO_MODEL = 'gemini-3.1-pro-preview'
-    FLASH_MODEL = 'gemini-3.6-flash'
+    FLASH_MODEL = 'gemini-3.8-flash'
 
     def __init__(
         self,

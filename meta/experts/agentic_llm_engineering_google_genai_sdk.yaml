@@ -1,0 +1,8 @@
+role: agentic_llm_engineering_google_genai_sdk
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Implement spatial reasoning guardrails and strict math types early to ensure robust,
+  type-safe Google GenAI tool calling and coordinate validation.
+last_updated: '2026-09-20T19:03:49.686255+00:00'

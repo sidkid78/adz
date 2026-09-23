@@ -1,0 +1,8 @@
+role: database_engineering_vector_databases_supabase_postgresql
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Generate Supabase TypeScript types using the CLI (`npx supabase gen types`) to ensure
+  type safety for schema, vector search, and realtime features.
+last_updated: '2026-09-20T19:04:20.903119+00:00'
