@@ -84,7 +84,14 @@ PACKAGE_JSON = {
         # on a developer laptop for reasons unrelated to the code.
         "typegen": "next typegen",
         "check:routes": "tsc -p tsconfig.json --noEmit",
-        "gate": "npm run typecheck && npm run test",
+        # `pregate`/`gate`, not `typecheck && test`, for the same reason.
+        # npm runs `pre<name>` before `<name>` itself and stops if it
+        # exits nonzero, so the sequencing comes from npm rather than
+        # from a shell operator that PowerShell cannot parse. Verified
+        # by breaking a type on purpose: pregate fails, vitest never
+        # runs, `npm run gate` exits 1.
+        "pregate": "npm run typecheck",
+        "gate": "npm run test",
     },
     "dependencies": {
         "@supabase/supabase-js": "^2.58.0",
