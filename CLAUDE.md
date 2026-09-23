@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Guidance for Claude Code when working in this repository.
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
 ## What this is
 
@@ -35,6 +35,9 @@ python architecture_watcher.py --once <execution.json>   # one file, then exit
 python factory_telemetry.py --serve            # -> http://localhost:8777/dashboard.html
 python factory_telemetry.py                    # tail the latest run's events
 python reachability.py factory_workspace/<name>   # orphan check on its own
+python runtime_proof.py factory_workspace/<name> / /dashboard   # boot the build, assert 200s
+python visual_review.py factory_workspace/<name>  # vision review of the proof screenshot
+python clean_install.py factory_workspace/<name> [--no-build]   # clone HEAD, npm ci, build
 
 # The document factory (kept; the right tool when the deliverable is prose)
 python run_factory.py --plan          # intake + routing for everything in specs/, zero API calls
@@ -60,7 +63,8 @@ uv run uvicorn webhook_server:app --reload   # must be run from hooks/ (see Impo
 python dropzone_watcher.py                   # watches drops/inbox/* per drops.yaml
 ```
 
-Dependencies are managed with **uv** (`uv sync`); Python 3.12.
+Dependencies are managed with **uv** (`uv sync`); Python 3.12. The runtime-proof screenshot
+uses the factory's own Playwright, which needs `python -m playwright install chromium` once.
 
 ## Environment
 
@@ -88,6 +92,9 @@ orch2 execution  ->  import_architecture.py   preserve dependencies, output_form
                  ->  build_order()            Kahn layers; nothing builds before what it imports
                  ->  changesets.py            derive owned files from the architecture document
                  ->  greenfield.py            scaffold a real git repo, npm install once
+                 ->  dependencies.py          install the npm packages the architecture's
+                                              TS/JS fences import (registry-verified)
+                 ->  api_surface.py           excerpt the INSTALLED .d.ts for the builder
                  ->  ChangesetAgent           write all of a ticket's files in one turn
                  ->  per-ticket gate          tsc (SOURCE only) + vitest; seconds, so it
                                               runs on every repair attempt
@@ -95,8 +102,9 @@ orch2 execution  ->  import_architecture.py   preserve dependencies, output_form
                  ->  integration gate         typecheck, vitest, `next build`,
                                               `next typegen` + route contracts,
                                               `deno check` (edge functions),
-                                              reachability, `supabase db reset`;
-                                              minutes, once
+                                              reachability, runtime proof,
+                                              visual review, clean install,
+                                              `supabase db reset`; minutes, once
                  ->  blame + repair           map the failure to the ticket owning the
                                               file, reopen it, re-run the gate
 ```
@@ -151,6 +159,32 @@ Tailwind never installed, and no `dev` script. Every one typechecked, built and 
   once wrote Next components to `src/app/<ticket>.tsx` (not a route — App Router needs
   `page.tsx` in a directory) and scripts to `src/<ticket>.ts` (nothing imports them). Both
   typecheck; neither can run.
+- **Static gates can't see a running app.** `runtime_proof.py` boots the existing production
+  build and asserts 200s with a non-trivial body (a repo whose `/` was 404 passed every static
+  gate twice). `clean_install.py` clones committed HEAD and runs `npm ci` + build, catching
+  anything that only works because of accumulated workspace state (lockfile drift, gitignored
+  files). Teardown uses `taskkill /T /F` on Windows — an orphaned dev server holding a port is
+  how the next run fails mysteriously.
+- **`visual_review.py` is the one model-checked step, and it is asymmetric.** A vision model reads
+  the runtime-proof screenshot; a CRITICAL finding can fail an otherwise-green build, but its own
+  "PASS" is discarded and recomputed from its findings, so it can never rescue a failed step.
+  Keep it that way — letting a model opinion overturn an exit code breaks the central rule.
+- **Some compiling code is still refused.** `changesets.py` rejects a changeset that casts to
+  `never` (`as unknown as never` silences the compiler rather than satisfying it) or leaves the
+  Supabase `Database` type incomplete. Add a check there when a new "compiles but defeats the
+  type system" pattern appears, rather than trusting `tsc`.
+
+**Packages come from the architecture, APIs from the installed `.d.ts`.** Tickets can't edit
+`package.json`, so `dependencies.py` extracts imports from the architecture's TS/JS fences only
+(SQL `FROM "x"` and path aliases otherwise leak in) and verifies each name against the npm
+registry before installing; peer conflicts are resolved with a scoped `overrides` block.
+`api_surface.py` then hands the builder excerpts of the *installed* type declarations, because
+architectures are written from training data (Inngest v3 against an installed v4). Never fix
+that class of failure by patching one library's name upstream — it doesn't scale.
+
+**Cost is recorded in tokens; dollars only when priced.** `cost.py`'s `Ledger` records exact
+token counts (including billed thought tokens) and derives dollars only for models present in
+`PRICES`. Don't add an estimated price — a stale table produces confident wrong numbers.
 
 **Infrastructure failures are not code failures.** `is_infra_failure()` in `greenfield.py`
 classifies a gate transcript as environment vs. code (refused sockets, 5xx, port conflicts,
@@ -271,7 +305,9 @@ contracts, clicking through a vendor console). Producing the spec, runbook, mapp
 `client.interactions.create(model=..., system_instruction=..., input=...)` and reads
 `interaction.output_text`. `client.chats.create(...)` is used only where a *single session with
 memory of its prior attempt* is required (`software_factory_example.py`, showcase phase 5) — that
-session continuity is load-bearing for the repair loop, not incidental.
+session continuity is load-bearing for the repair loop, not incidental. `ChangesetAgent` and
+`artifact_agent.py` get the same continuity from the Interactions API by threading
+`previous_interaction_id` across a ticket's attempts, which also keeps its context cached.
 
 **Model tiers.** Model ids are inline string constants near the top of each module (scout /
 flash-lite for cheap filtering, pro for planning, flash for building). Keep the cheap-scout,
