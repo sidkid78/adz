@@ -1,7 +1,6 @@
 ```markdown
 ---
 name: RevOps_FieldService_Architect
-model: claude-3-5-sonnet-20241022
 tier: reasoning-workhorse
 color: "#D2691E"
 tools: []

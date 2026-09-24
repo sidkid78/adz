@@ -1,7 +1,6 @@
 ```markdown
 ---
 agent_name: RevOps_ServiceTitan_Architect
-model: claude-3-opus-20240229
 temperature: 0.1
 color: "#D35400"
 tools: []

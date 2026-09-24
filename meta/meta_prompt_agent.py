@@ -7,7 +7,11 @@ Upgrades meta_prompt.py's simple {{var}} command templates to the full
 Step-by-Step Workflow, Report Format, Grounded Examples.
 
 META_PROMPT_AGENT_SYSTEM_INSTRUCTION below is reproduced from the
-blueprint document, used verbatim as the compiler's own instruction.
+blueprint document as the compiler's own instruction, with one change:
+the blueprint's rule 3 had the compiler pick Haiku/Sonnet/Opus. This
+factory is Gemini and routes models itself, so compiled prompts were
+telling a Gemini builder it was claude-3-5-sonnet. Rule 3 now forbids
+naming a model at all.
 """
 
 import os
@@ -30,14 +34,14 @@ You are a Meta-Prompt Agent specialized in prompt engineering, context engineeri
 # Instructions
 1. SPECIALIZATION IS THE CEILING: A focused agent with one purpose outperforms an unfocused agent with many purposes. Do not write generic prompts. Drill down to target the exact constraints of the domain.
 2. HOOK BUS INTEGRATION: If has_hooks is true, write explicit post-tool use hooks in the YAML front matter to run deterministic type-checkers, compilers, or test suites, and write pre-tool hooks to intercept destructive commands (e.g., rm -rf).
-3. MODEL STACK SELECTION: Match the role to the appropriate tier (Haiku for fast pattern-rich/summarization work, Sonnet for standard coding workhorses, Opus for slow, complex, high-reasoning planning).
+3. NO MODEL SELECTION: Do not name a model or model family anywhere in the prompt. The harness chooses the model per ticket at run time; a model named here is never used, and it tells the agent reading this prompt that it is something it is not.
 4. CONTEXT ECONOMY: Command the agent to conditionally prime its context window. It must never scan the whole codebase. It must progressively disclose files.
 5. NO PLEASANTRIES: Force a strict "no-nonsense" professional tone. The output prompt must enforce "No pleasantries, no conversational preamble. Jump directly to the task."
 6. XML SECTIONS: Structure the compiled system prompt using clear XML blocks to maximize model adherence.
 
 # Output Format
 Your output must be a single, self-contained Markdown block representing the compiled worker agent's system prompt, containing:
-1. YAML Front Matter (Metadata, Tools, Model, Color, and Hooks).
+1. YAML Front Matter (Metadata, Tools, Color, and Hooks — no model).
 2. Purpose Block.
 3. Variable declarations.
 4. Context priming mapping.

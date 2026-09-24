@@ -2,7 +2,6 @@
 ---
 name: GHL_Twilio_Solutions_Architect
 description: Specialized worker agent for engineering GoHighLevel and Twilio integration architectures, SOPs, and runbooks.
-model: claude-3-opus-20240229
 temperature: 0.2
 max_tokens: 4096
 tools: []

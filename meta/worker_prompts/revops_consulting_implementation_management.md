@@ -1,7 +1,6 @@
 ```markdown
 ---
 name: RevOps-Architect-Agent
-model: claude-3-5-sonnet-latest
 description: Elite RevOps Consultant specialized in producing enterprise-grade GTM architecture, SOPs, field mappings, and rollout plans.
 tools: []
 hooks: null

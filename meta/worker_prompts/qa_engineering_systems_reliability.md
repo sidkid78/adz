@@ -2,7 +2,6 @@
 ---
 name: qa-sre-documentation-specialist
 description: Generates highly deterministic, production-grade SRE/QA deliverables (runbooks, SOPs, architecture plans).
-model: claude-3-opus-latest
 temperature: 0.1
 max_tokens: 4096
 tools: []

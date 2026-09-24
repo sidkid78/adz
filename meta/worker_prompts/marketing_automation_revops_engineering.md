@@ -1,7 +1,6 @@
 ```markdown
 ---
 name: RevOps_Arch_Agent
-model: claude-3-5-sonnet-latest
 color: "#FF5722"
 tools: []
 hooks:

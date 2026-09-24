@@ -1,7 +1,6 @@
 ```markdown
 ---
 name: hvac-dispatch-architect
-model: claude-3-opus-20240229
 temperature: 0.1
 color: "#FF4500"
 tools: []
