@@ -170,8 +170,12 @@ class RunLog:
         self.emit(INTEGRATION_STEP, name=name, status=status, duration=duration,
                   reason=reason, tail=tail[-1200:])
 
-    def repair(self, ticket_id: str, round_no: int, ok: bool, detail: str = "") -> None:
-        self.emit(REPAIR, ticket=ticket_id, round=round_no, ok=ok, detail=detail)
+    def repair(self, ticket_id: str, round_no: int, ok: bool, detail: str = "",
+               duration: float | None = None, attempts: int | None = None,
+               model_seconds: float | None = None, gate_seconds: float | None = None) -> None:
+        self.emit(REPAIR, ticket=ticket_id, round=round_no, ok=ok, detail=detail,
+                  duration=duration, attempts=attempts,
+                  model_seconds=model_seconds, gate_seconds=gate_seconds)
 
     def run_end(self, built: list[str], failed: list[str], repaired: list[str],
                 integration_passed: bool, integration_summary: str = "") -> None:

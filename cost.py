@@ -151,9 +151,14 @@ class Ledger:
         wasted = (failed.billable / total.billable) if total.billable else 0.0
 
         # Attempt 1 is generation; everything after is repair. The gap
-        # between them is the diminishing-returns curve.
-        first = self._sum([r for r in self.attempts if r["attempt"] == 1])
-        later = self._sum([r for r in self.attempts if r["attempt"] > 1])
+        # between them is the diminishing-returns curve. Integration
+        # repairs are kept apart: they re-open a ticket AFTER it passed,
+        # so counting their first call as a "first attempt" would bend
+        # exactly the curve this ratio exists to show.
+        build = [r for r in self.attempts if r["phase"] != "integration_repair"]
+        first = self._sum([r for r in build if r["attempt"] == 1])
+        later = self._sum([r for r in build if r["attempt"] > 1])
+        integration = self._sum([r for r in self.attempts if r["phase"] == "integration_repair"])
 
         return {
             "tickets": len(by_ticket),
@@ -163,6 +168,7 @@ class Ledger:
             "cache_rate": round(total.cache_rate, 3),
             "first_attempt_tokens": first.billable,
             "repair_tokens": later.billable,
+            "integration_repair_tokens": integration.billable,
             "by_model": {m: {"tokens": u.billable, "cache_rate": round(u.cache_rate, 3),
                              "cost_usd": u.cost_usd()}
                          for m, u in sorted(by_model.items())},
@@ -183,6 +189,8 @@ class Ledger:
              f"attempt(s), {s['tickets']} ticket(s)"),
             (f"           first attempts {s['first_attempt_tokens']:,} | "
              f"repairs {s['repair_tokens']:,}{ratio}"),
+            *([f"           integration repairs {s['integration_repair_tokens']:,}"]
+              if s["integration_repair_tokens"] else []),
             (f"           cache {s['cache_rate']:.0%} | spent on tickets that "
              f"never passed: {s['wasted_ratio']:.0%}"),
         ]

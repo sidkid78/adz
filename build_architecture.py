@@ -298,22 +298,47 @@ def blame_tickets(failure: str, owners: dict[str, str]) -> list[str]:
 
 
 def repair_ticket(repo: TargetRepo, ticket: dict, contract, failure: str,
-                  max_attempts: int = 3) -> tuple[bool, str]:
+                  max_attempts: int = 3, log=None,
+                  ledger: "Ledger | None" = None) -> tuple[bool, str, dict]:
     """Re-open a committed ticket to fix an integration failure.
 
     A fresh agent session, primed with the CURRENT contents of the files
     the ticket owns — the original session is gone, and the files have
     been committed since, so the repair prompt has to carry the code
     rather than assume the model remembers writing it.
+
+    Returns timing alongside the verdict. A 42-minute run once spent
+    about eleven minutes somewhere no event accounted for, and the repair
+    rounds were the only phase nothing timed. Model time and gate time
+    are split because they call for different fixes: slow model calls
+    argue for a cheaper repair tier, a slow gate for a narrower one.
     """
+    import time as _time
+    started = _time.time()
+    stats: dict = {"attempts": 0, "model_seconds": 0.0, "gate_seconds": 0.0}
     route = ROUTES.get(ticket.get("complexity", "medium"), ROUTES["medium"])
     agent = ChangesetAgent(model=route["model"], system_instruction=SYSTEM_INSTRUCTION)
+
+    def ask(call, *args):
+        t0 = _time.time()
+        out = call(*args)
+        stats["model_seconds"] += _time.time() - t0
+        if ledger is not None and getattr(agent, "last_usage", None):
+            ledger.record(ticket["id"], stats["attempts"] + 1, "integration_repair",
+                          agent.last_usage)
+        return out
+
+    def done(ok: bool, detail: str) -> tuple[bool, str, dict]:
+        stats["duration"] = _time.time() - started
+        return ok, detail, {k: round(v, 2) if isinstance(v, float) else v
+                            for k, v in stats.items()}
 
     current = "\n\n".join(
         f"--- {p} ---\n{repo.read_file(p)}"
         for p in contract.required_paths if repo.read_file(p) is not None
     )
-    files = agent._call(
+    files = ask(
+        agent._call,
         f"These files are already committed but the INTEGRATION gate rejects them:\n\n"
         f"```\n{failure[-5000:]}\n```\n\n"
         f"## Current contents\n{current}\n\n"
@@ -322,24 +347,27 @@ def repair_ticket(repo: TargetRepo, ticket: dict, contract, failure: str,
     )
 
     for attempt in range(1, max_attempts + 1):
+        stats["attempts"] = attempt
         if not files:
-            return False, "agent produced no parseable files"
+            return done(False, "agent produced no parseable files")
         # A repair fixes code the gate rejected. It does not get to mint
         # new tests: that is how an earlier one "fixed" reachability.
         try:
             repo.write_files(files, allow_new_tests=False)
         except ValueError as refused:
-            files = agent.repair(str(refused), contract)
+            files = ask(agent.repair, str(refused), contract)
             continue
-        gate = repo.run_gate(PER_TICKET_GATE)
+        t0 = _time.time()
+        gate = repo.run_gate(PER_TICKET_GATE, log=log, ticket=f"{ticket['id']} (repair)")
+        stats["gate_seconds"] += _time.time() - t0
         if gate.passed:
             repo.commit(f"fix({ticket['id']}): satisfy integration gate")
-            return True, f"repaired on attempt {attempt}"
+            return done(True, f"repaired on attempt {attempt}")
         if attempt < max_attempts:
-            files = agent.repair(gate.transcript, contract)
+            files = ask(agent.repair, gate.transcript, contract)
 
     repo.revert_uncommitted()
-    return False, "repair exhausted its attempts"
+    return done(False, "repair exhausted its attempts")
 
 
 def main() -> int:
@@ -598,9 +626,12 @@ def main() -> int:
         for tid in blamed:
             if tid not in contracts:
                 continue
-            ok, detail = repair_ticket(repo, tickets[tid], contracts[tid], integration.transcript)
-            print(f"    repair {tid}: {'OK' if ok else 'FAILED'} — {detail}")
-            log.repair(tid, round_no, ok, detail)
+            ok, detail, stats = repair_ticket(repo, tickets[tid], contracts[tid],
+                                              integration.transcript, log=log, ledger=ledger)
+            print(f"    repair {tid}: {'OK' if ok else 'FAILED'} — {detail} "
+                  f"({stats['duration']:.0f}s: model {stats['model_seconds']:.0f}s, "
+                  f"gate {stats['gate_seconds']:.0f}s, {stats['attempts']} attempt(s))")
+            log.repair(tid, round_no, ok, detail, **stats)
             if ok:
                 repairs.append(tid)
                 progressed = True
