@@ -1,0 +1,31 @@
+{
+  "slug": "mctb_lead_capture_engine",
+  "kind": "markdown_document",
+  "artifact_name": "mctb_automation_spec",
+  "checks": [
+    {
+      "type": "regex_present",
+      "pattern": "existing_customer",
+      "description": "Must include the existing_customer tag exclusion rule to prevent false positives"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "(?i)Branch_Fallback_Ring_Group",
+      "description": "Must include the fallback ring group branch in the workflow logic"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "Emergency \\(Leak/Danger\\)",
+      "description": "Must include the exact emergency urgency level custom field value"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "(?i)A2P 10DLC",
+      "description": "Must include the A2P 10DLC compliance warning in the implementation hand-off notes"
+    },
+    {
+      "type": "fenced_blocks_parse"
+    }
+  ],
+  "test_code": null
+}

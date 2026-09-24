@@ -1,0 +1,8 @@
+role: revops_consulting_implementation_management
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Define explicit data ownership and synchronization rules across your technology
+  stack early to prevent data contamination and race conditions during deployment.
+last_updated: '2026-09-24T03:42:48.471720+00:00'

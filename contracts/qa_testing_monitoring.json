@@ -1,0 +1,42 @@
+{
+  "slug": "qa_testing_monitoring",
+  "kind": "markdown_document",
+  "artifact_name": "qa_validation_reliability_framework",
+  "checks": [
+    {
+      "type": "required_sections",
+      "sections": [
+        "End-to-End User Acceptance Testing (UAT) Matrix",
+        "Failure-Mode Analysis & Edge-Case Troubleshooting Decision Trees",
+        "Regulatory, Carrier & Compliance Hardening Checklist",
+        "Automated Health Monitoring, Synthetic Probes & SLA Alerting",
+        "Day 4 Go-Live Reliability Sign-Off Gate"
+      ]
+    },
+    {
+      "type": "min_table_rows",
+      "count": 15
+    },
+    {
+      "type": "regex_present",
+      "pattern": "UAT-011",
+      "description": "Verifies all 11 User Acceptance Testing scenarios are present"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "11,445",
+      "description": "Includes the specific baseline financial target of $11,445 projected net ROI"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "(?i)A2P 10DLC",
+      "description": "Contains carrier compliance terminology for Twilio SMS"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "(?i)SaneBox VIP Routing",
+      "description": "Includes the email triage tests for the specific client software stack"
+    }
+  ],
+  "test_code": null
+}

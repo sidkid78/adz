@@ -20,3 +20,9 @@ factory_runs/
 
 # Visual review verdict cache (content-addressed)
 .visual_cache/
+
+# Client deliverables and client-specific inputs. The contracts that
+# graded them (contracts/) are the record that belongs in version
+# control; the documents themselves belong to the client.
+drops/outbox/
+specs/edgecraft-revops.architecture.json
