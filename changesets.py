@@ -296,6 +296,40 @@ def specified_but_unowned(tickets: list[dict], owned: set[str]) -> list[str]:
     return [p for p in drawn if p not in owned]
 
 
+def named_paths(ticket: dict) -> list[str]:
+    """The files a ticket itself names — declared, or else scraped from
+    its prose — before ownership or extension filtering. Empty means any
+    path the ticket ends up with was guessed by fallback_path()."""
+    declared = [normalize_path(p.strip().replace("\\", "/"))
+                for p in (ticket.get("files") or []) if isinstance(p, str) and p.strip()]
+    return declared or extract_owned_paths(ticket.get("architecture", ""))
+
+
+def deliverable_kind(tickets: list[dict]) -> tuple[str, str]:
+    """"code" or "document", and why. Deterministic; no model involved.
+
+    orch2 plans both software and consulting work, and the software
+    factory cannot tell them apart by itself: fallback_path() hands every
+    ticket SOME path, so a runbook ticket becomes
+    src/app/<ticket>/page.tsx and the plan looks perfectly buildable.
+    That is how a GoHighLevel/Twilio consulting engagement produced a
+    clean-looking five-ticket Next.js plan.
+
+    The signal that separated it was absolute: across every code
+    architecture built so far, most tickets name their files and at most
+    three in nine lean on the fallback. In the consulting one, NONE did.
+    So the rule is the conservative one — document only when no ticket
+    names a single file. A mixed plan stays code; the fallback exists
+    for the odd ticket that states no path, not for a whole plan.
+    """
+    named = [t["id"] for t in tickets
+             if any(p.startswith(ALLOWED_ROOTS) for p in named_paths(t))]
+    if not named:
+        return "document", (f"none of the {len(tickets)} ticket(s) names a file under "
+                            f"{', '.join(ALLOWED_ROOTS)} — every path would be a guess")
+    return "code", f"{len(named)}/{len(tickets)} ticket(s) name their own files"
+
+
 def contract_for_ticket(ticket: dict, gate: list[list[str]],
                         already_owned: set[str]) -> ChangesetContract:
     """Derive a changeset contract, deterministically. Raises
@@ -310,9 +344,7 @@ def contract_for_ticket(ticket: dict, gate: list[list[str]],
     Scraping stays as the fallback, because every architecture written
     before the schema gained that field still has to build.
     """
-    declared = [normalize_path(p.strip().replace("\\", "/"))
-                for p in (ticket.get("files") or []) if isinstance(p, str) and p.strip()]
-    candidates = declared or extract_owned_paths(ticket["architecture"])
+    candidates = named_paths(ticket)
 
     kept, rejected = [], []
     for path in candidates:

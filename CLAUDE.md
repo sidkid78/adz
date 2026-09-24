@@ -339,8 +339,15 @@ that is pre-existing. `factory_router.py` no longer writes to it — builds run 
 **Client material never gets committed.** The repo is public and the factory runs real client
 engagements. `drops/inbox/` (what a client sent) and `drops/outbox/` (what was delivered) are
 gitignored, and a local `.git/hooks/pre-commit` refuses any staged path under them, `git add -f`
-included. Don't bypass it with `--no-verify`. Client specs imported into `specs/` get an explicit
-`.gitignore` line (see `edgecraft-revops`).
+included. Don't bypass it with `--no-verify`. The same applies to imported architectures:
+`specs/*.architecture.json` is ignored and the hook refuses a newly added one; the four demo specs
+already tracked stay tracked.
+
+**Code vs. document is decided before anything builds.** `changesets.deliverable_kind()` calls an
+architecture a document job when no ticket names a single file — every path would come from
+`fallback_path()`. `architecture_watcher.py` routes those to `run_factory.py` (on the raw orch2
+execution, which is the format its intake reads), and `build_architecture.py --build` refuses them
+unless given `--code-anyway`. The rule is deliberately conservative: a mixed plan stays code.
 
 ## Config files
 

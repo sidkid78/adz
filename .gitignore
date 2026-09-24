@@ -26,4 +26,7 @@ factory_runs/
 # control; the documents themselves belong to the client.
 drops/inbox/
 drops/outbox/
-specs/edgecraft-revops.architecture.json
+# Every orch2 import lands here, and orch2 plans client work. The four
+# demo architectures already tracked stay tracked (ignore rules never
+# apply to tracked files); nothing new gets in without deciding to.
+specs/*.architecture.json

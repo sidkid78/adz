@@ -54,6 +54,7 @@ from changesets import (
     ChangesetAgent,
     ChangesetError,
     contract_for_ticket,
+    deliverable_kind,
     specified_but_unowned,
     validate_changeset,
 )
@@ -385,6 +386,8 @@ def main() -> int:
                     help="do not write factory_runs/<id>/events.jsonl")
     ap.add_argument("--integration-rounds", type=int, default=2,
                     help="how many times to repair-and-retry the integration gate")
+    ap.add_argument("--code-anyway", action="store_true",
+                    help="build even when no ticket names a file (a document architecture)")
     args = ap.parse_args()
 
     arch = json.loads(args.architecture.read_text(encoding="utf-8"))
@@ -445,6 +448,20 @@ def main() -> int:
         if routes:
             print("           ^ these are ROUTES — without them the app has no "
                   "such pages, whatever else builds.")
+
+    # Said BEFORE anything spends tokens. A consulting engagement once
+    # planned as five buildable tickets, every path a fallback guess, and
+    # the plan printed "5 ticket(s) contracted" as if all was well.
+    kind, why = deliverable_kind(arch["tickets"])
+    if kind == "document":
+        source = arch.get("source") or "<orch2 execution>.json"
+        print(f"\nDOCUMENT : this is not a code architecture — {why}.")
+        print("           The deliverable is prose; build it with the document factory:")
+        print(f"           python run_factory.py {source} --build")
+        if args.build and not args.code_anyway:
+            print("REFUSING : --build on a document architecture "
+                  "(pass --code-anyway to override)")
+            return 1
 
     if args.plan or not args.build:
         print(f"\n{len(contracts)} ticket(s) contracted, "

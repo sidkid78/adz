@@ -20,10 +20,12 @@ more care than one that copies a file, so:
       size has stopped changing AND import_architecture parses it with
       every planned subtask present — the same completeness guard that
       caught the truncated nfo.json export.
-  BUILDABILITY  An architecture whose tickets yield no file contracts is
-      not code work (orch2 also plans business rollouts). Those are
-      reported and skipped rather than fed to a builder that would
-      produce nothing.
+  ROUTING  orch2 plans consulting work as well as software. When no
+      ticket names a file (changesets.deliverable_kind), the deliverable
+      is prose, and it goes to run_factory.py — the document factory —
+      instead of being built as a Next.js app from guessed paths. An
+      architecture that is code but yields no file contracts at all is
+      reported and skipped.
   A LEDGER  Every decision is appended to factory_runs/watcher.jsonl, so
       "why did it skip that one" is answerable after the fact.
   A CEILING  --max-tickets refuses plans larger than expected rather than
@@ -54,7 +56,7 @@ if str(REPO_ROOT) not in sys.path:
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from changesets import ChangesetError, contract_for_ticket
+from changesets import ChangesetError, contract_for_ticket, deliverable_kind
 from import_architecture import IncompleteExport, build_order, load_architecture
 
 DEFAULT_WATCH_DIR = Path(
@@ -201,13 +203,28 @@ class ArchitectureHandler(FileSystemEventHandler):
                    detail="raise --max-tickets to allow it")
             return
 
+        name = slug_for(arch, path)
+
+        # Route before importing. A document architecture fed to the
+        # software factory still "plans" — fallback paths give every
+        # ticket a file — so skipping on zero contracts never caught it.
+        kind, why = deliverable_kind(tickets)
+        if kind == "document":
+            record("routed_document", file=path.name, name=name, tickets=len(tickets),
+                   detail=why)
+            if self.args.plan_only:
+                record("plan_only", name=name, detail="skipping document build (--plan-only)")
+                return
+            with self.lock:
+                self.build_documents(path, name)
+            return
+
         contracted, files, missing = contract_summary(arch)
         if contracted == 0:
             record("skipped_not_code", file=path.name, tickets=len(tickets),
                    detail="no ticket yields a file contract; this is not a code architecture")
             return
 
-        name = slug_for(arch, path)
         spec = SPECS_DIR / f"{name}.architecture.json"
         SPECS_DIR.mkdir(parents=True, exist_ok=True)
         spec.write_text(json.dumps(arch, indent=2), encoding="utf-8", newline="\n")
@@ -237,6 +254,23 @@ class ArchitectureHandler(FileSystemEventHandler):
         record("build_end", name=name, exit=proc.returncode,
                seconds=int(time.time() - started),
                detail=f"repo: factory_workspace/{name}")
+
+    def build_documents(self, execution: Path, name: str) -> None:
+        """The document factory reads the orch2 execution directly — its
+        intake parses the orchestrator report format, not the imported
+        architecture — authors a contract per ticket, then builds and
+        gates each document. Passing ones land in drops/outbox/factory/."""
+        log_path = REPO_ROOT / "factory_runs" / f"watch_{name}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [sys.executable, str(REPO_ROOT / "run_factory.py"), str(execution), "--build"]
+        record("document_build_start", name=name, log=log_path.name)
+        started = time.time()
+        with log_path.open("w", encoding="utf-8", newline="\n") as fh:
+            proc = subprocess.run(cmd, cwd=REPO_ROOT, stdout=fh,
+                                  stderr=subprocess.STDOUT, check=False)
+        record("document_build_end", name=name, exit=proc.returncode,
+               seconds=int(time.time() - started),
+               detail="documents: drops/outbox/factory/; escalations: factory_runs/<run>/escalated/")
 
 
 def main() -> int:
