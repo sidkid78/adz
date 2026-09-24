@@ -24,3 +24,11 @@ dependencies = [
 members = [
     "test",
 ]
+
+# notes/ holds unverified design sketches, not code the factory runs
+# (see notes/README.md) — grading them would only bury real findings.
+[tool.ruff]
+extend-exclude = ["notes"]
+
+[tool.mypy]
+exclude = ["^notes/"]
