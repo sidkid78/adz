@@ -323,6 +323,10 @@ fallbacks to work both ways. Match the file you are editing rather than normaliz
 declared in `pyproject.toml`. If you touch dependency handling, add them rather than assuming the
 manifest is complete.
 
+**`notes/` is early plans, not a spec.** The blueprints and `notes/code-examples/` were never
+verified and several contradict rules the code now enforces. Read them for intent only; don't
+port them into the factory as written. `notes/README.md` maps each to what replaced it.
+
 **Legacy duplicates.** Hyphenated files (`factory-router.py`, `adz-watcher.py`) are older,
 non-importable versions of the underscored modules (`factory_router.py`, `dropzone_watcher.py`).
 Edit the underscored ones.
