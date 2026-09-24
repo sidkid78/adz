@@ -9,6 +9,11 @@ dependencies = [
     "google-genai>=2.17.0",
     "httpx>=0.28.1",
     "observer>=0.1.0",
+    # The factory's own browser, for the runtime proof screenshot. It
+    # belongs here and not in a generated repo: screenshotting is a
+    # gate's job, and no product should have to carry its inspector.
+    # Needs `python -m playwright install chromium` once.
+    "playwright>=1.63.0",
     "python-dotenv>=1.2.2",
     "pyyaml>=6.0.3",
     "uvicorn>=0.52.1",

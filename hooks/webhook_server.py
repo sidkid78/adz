@@ -16,11 +16,13 @@ import os
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
-from ..hooks.sandbox_workflow import run_workflow
+from sandbox_workflow import run_workflow
+from ci_repair_workflow import repair_ci_failure
 
 app = FastAPI()
 
 GITHUB_WEBHOOK_SECRET = os.environ["GITHUB_WEBHOOK_SECRET"]
+FACTORY_ROUTER_SECRET = os.environ["FACTORY_ROUTER_SECRET"]
 
 
 def verify_signature(payload: bytes, signature_header: str) -> None:
@@ -68,3 +70,22 @@ async def github_webhook(
     # Respond to GitHub immediately; the real work happens after this returns.
     background_tasks.add_task(run_workflow, ticket)
     return {"status": "accepted", "issue": ticket["issue_number"]}
+
+
+@app.post("/webhook/ci-failure")
+async def ci_failure_webhook(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_factory_secret: str = Header(default=""),
+):
+    """Called by .github/workflows/factory-validation.yml's 'Notify
+    Factory Router on CI Failure' step. This is a shared-secret check
+    (matching the X-Factory-Secret header), not a GitHub HMAC signature
+    — the guide's own security model, since this request originates
+    from your CI runner, not from GitHub's webhook system."""
+    if not x_factory_secret or not hmac.compare_digest(x_factory_secret, FACTORY_ROUTER_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid factory secret")
+
+    payload = await request.json()
+    background_tasks.add_task(repair_ci_failure, payload)
+    return {"status": "accepted", "pr_number": payload.get("pr_number")}

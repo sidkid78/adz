@@ -1,0 +1,8 @@
+role: next_js_app_router_react_architecture
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Use Supabase SSR helpers across client, server, and middleware to maintain reliable
+  authentication states in Next.js App Router applications.
+last_updated: '2026-09-20T14:09:33.432820+00:00'

@@ -80,3 +80,42 @@ class PromptRegistry:
             description=metadata.get("description"),
             source_name=name,
         )
+
+    def list_templates(self) -> list[str]:
+        """Return names of all available markdown prompt templates."""
+        if not self.commands_dir.exists():
+            return []
+        return sorted(p.stem for p in self.commands_dir.glob("*.md"))
+
+
+if __name__ == "__main__":
+    import sys
+
+    registry = PromptRegistry()
+
+    if len(sys.argv) < 2 or sys.argv[1] in ("-h", "--help"):
+        templates = registry.list_templates()
+        print("Usage: python prompt_registry.py <template_name> [var=value ...]\n")
+        if templates:
+            print("Available templates:")
+            for name in templates:
+                print(f"  - {name}")
+        else:
+            print(f"No templates found in {registry.commands_dir}")
+        sys.exit(0 if len(sys.argv) >= 2 and sys.argv[1] in ("-h", "--help") else 1)
+
+    template_name = sys.argv[1]
+    kwargs = {}
+    for arg in sys.argv[2:]:
+        if "=" in arg:
+            k, v = arg.split("=", 1)
+            kwargs[k] = v
+        else:
+            print(f"Warning: ignoring invalid argument '{arg}' (expected key=value)", file=sys.stderr)
+
+    try:
+        compiled = registry.render(template_name, **kwargs)
+        print(compiled.body)
+    except Exception as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)

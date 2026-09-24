@@ -1,0 +1,8 @@
+role: webxr_three_js_real_time_state_synchronization
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Maintain modular spatial computing components and hooks for clean WebXR scene graph
+  synchronization and asset management.
+last_updated: '2026-09-20T19:12:18.540383+00:00'

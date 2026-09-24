@@ -1,0 +1,12 @@
+role: bi_analytics_marketing_performance_attribution
+total_runs: 3
+successes: 2
+failures: 1
+notes:
+- Optimize dashboard setup steps and increase retry budgets to ensure all gates are
+  successfully satisfied before finalizing.
+- Verify API endpoints and webhook payload contracts for Google LSA and GoHighLevel
+  to ensure seamless operational intelligence dashboard integration.
+- Integrate Google LSA API with robust OAuth2 retry policies to capture precise lead
+  data and eliminate monthly revenue leakage for HVAC clients.
+last_updated: '2026-09-18T22:08:55.101406+00:00'

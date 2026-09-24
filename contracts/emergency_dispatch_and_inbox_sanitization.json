@@ -1,0 +1,50 @@
+{
+  "slug": "emergency_dispatch_and_inbox_sanitization",
+  "kind": "markdown_document",
+  "artifact_name": "after_hours_dispatch_guardrails",
+  "checks": [
+    {
+      "type": "required_sections",
+      "sections": [
+        "1. Emergency Triage Decision Matrix",
+        "2. On-Call Escalation Protocol Documentation & Dispatcher Workflow Guardrails",
+        "3. Dispatcher Email Inbox Sanitization Ruleset (SaneBox Deployment)",
+        "4. End-to-End Operational Execution Walkthrough (A Real-World Central Texas Scenario)"
+      ]
+    },
+    {
+      "type": "regex_present",
+      "pattern": "\\$189",
+      "description": "Must include the $189 after-hours emergency diagnostic fee"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "human-takeover",
+      "description": "Must enforce the 'human-takeover' dead-man override tag"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "(?i)300 seconds",
+      "description": "Must define the 300-second (5-minute) SLA timeout window for tier escalations"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "@SaneUrgentDispatch",
+      "description": "Must define the @SaneUrgentDispatch custom folder for inbox sanitization"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "Chris Koehne",
+      "description": "Must map Tier 3 Critical Override to owner Chris Koehne"
+    },
+    {
+      "type": "min_table_rows",
+      "count": 5
+    },
+    {
+      "type": "min_words",
+      "count": 1200
+    }
+  ],
+  "test_code": null
+}

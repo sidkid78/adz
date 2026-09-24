@@ -5,3 +5,18 @@ __pycache__/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+
+# Factory build output: generated repos are their own git repos,
+# and the build log is a run artifact, not source.
+factory_workspace/
+factory_build.log
+factory_runs/
+
+# Playwright MCP scratch (snapshots, console logs)
+.playwright-mcp/
+
+# Gemini Agent
+.gemini-agent/cache/
+
+# Visual review verdict cache (content-addressed)
+.visual_cache/

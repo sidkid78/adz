@@ -1,0 +1,8 @@
+role: data_science_resource_management
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Always implement resource allocation engines with explicit multi-constraint validation
+  logic, specialized prompts, and dedicated task-assignment tools.
+last_updated: '2026-09-19T05:17:19.751167+00:00'

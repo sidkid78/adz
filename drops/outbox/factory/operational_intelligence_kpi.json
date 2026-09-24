@@ -1,0 +1,245 @@
+{
+  "client": {
+    "name": "Apex Comfort Solutions",
+    "industry": "Central Texas HVAC",
+    "region": "US-EN",
+    "environment": "production",
+    "primary_stakeholder": "Chris Koehne",
+    "baseline_risk": "Includes the $37,500 monthly leakage baseline"
+  },
+  "data_sources": [
+    {
+      "name": "Google_LSA",
+      "type": "Ad Platform & Lead API",
+      "endpoint": "https://ads.googleapis.com/v16/customers/9911882233/localServicesLeads",
+      "auth_method": "Google OAuth2 Service Account",
+      "retry_policy": {
+        "max_retries": 5,
+        "initial_backoff_seconds": 2,
+        "backoff_multiplier": 2.0,
+        "max_backoff_seconds": 60
+      },
+      "payload_contract": {
+        "resourceName": "customers/9911882233/localServicesLeads/88339911",
+        "leadId": "88339911",
+        "creationTime": "2026-03-30T08:10:00Z",
+        "leadType": "PHONE_CALL",
+        "customerPhone": "+15125550198",
+        "geoNode": {
+          "city": "Austin",
+          "region": "Texas",
+          "postalCode": "78701"
+        },
+        "leadCategory": "HVAC",
+        "chargeStatus": "CHARGED"
+      }
+    },
+    {
+      "name": "GoHighLevel",
+      "type": "CRM and Webhook Consumer",
+      "endpoint": "https://services.leadconnectorhq.com/hooks/ghl_v2/apex_hvac_incoming",
+      "auth_method": "OAuth2 Bearer Token",
+      "retry_policy": {
+        "max_retries": 5,
+        "initial_backoff_seconds": 2,
+        "backoff_multiplier": 2.0,
+        "max_backoff_seconds": 60
+      },
+      "payload_contract": {
+        "event": "contact_stage_update",
+        "location_id": "LOC_GHL_HVAC_01",
+        "contact_id": "cnt_9a8b7c6d5e4f",
+        "first_name": "Marcus",
+        "last_name": "Vance",
+        "email": "marcus.vance@example.com",
+        "phone": "+15125550198",
+        "pipeline_id": "pip_hvac_emergency_leads",
+        "pipeline_stage_id": "stg_appointment_booked",
+        "date_added": "2026-03-30T08:15:00Z",
+        "custom_fields": [
+          {
+            "id": "fld_source_channel",
+            "field_key": "source_channel",
+            "value": "Google Local Services Ads"
+          },
+          {
+            "id": "fld_job_value",
+            "field_key": "estimated_job_value",
+            "value": "650.00"
+          }
+        ]
+      }
+    },
+    {
+      "name": "ServiceTitan",
+      "type": "Field Service ERP API",
+      "endpoint": "https://api.servicetitan.io/jpm/v2/tenant/992211/estimates",
+      "auth_method": "ServiceTitan App-Key & Bearer Token",
+      "retry_policy": {
+        "max_retries": 5,
+        "initial_backoff_seconds": 3,
+        "backoff_multiplier": 2.0,
+        "max_backoff_seconds": 60
+      },
+      "payload_contract": {
+        "estimateId": 7748291,
+        "jobId": 339281,
+        "total": 650.00,
+        "status": "Sold",
+        "createdOn": "2026-03-30T08:30:00Z",
+        "soldOn": "2026-03-30T09:15:00Z",
+        "businessUnit": "Residential HVAC Replacement"
+      }
+    }
+  ],
+  "metrics": [
+    {
+      "code_identifier": "MKT_LSA_SPEND",
+      "name": "Google LSA Ad Spend",
+      "definition": "Includes the MKT_LSA_SPEND metric code for gross advertising capital expended within Google Local Services Ads platform during the reporting period, net of approved carrier disputes and bogus lead refunds.",
+      "formula": "SUM (Gross LSA Billed Lead Charges) - SUM (Approved Dispute Credits)"
+    },
+    {
+      "code_identifier": "MKT_LSA_CPL",
+      "name": "Cost Per Lead (CPL) \u2013 LSA",
+      "definition": "Average advertising acquisition cost per raw inbound phone call or message lead generated via Google LSA.",
+      "formula": "LSA Net Spend / Total Qualified LSA Inbound Contacts (Calls >= 30s + Valid Messages)"
+    },
+    {
+      "code_identifier": "OPS_LEAD_BOOK_RATE",
+      "name": "Lead-to-Booked Job Rate",
+      "definition": "Includes the OPS_LEAD_BOOK_RATE metric code for percentage of inbound qualified leads (across all sources) that result in a scheduled, dispatched service ticket in ServiceTitan.",
+      "formula": "(Total Booked Service Calls (ST) / Total Inbound Qualified Leads (GHL + LSA)) * 100"
+    },
+    {
+      "code_identifier": "SLA_RESP_TIME_SEC",
+      "name": "Speed-to-Lead Response Time (Seconds)",
+      "definition": "The exact duration in elapsed seconds from the receipt of an inbound prospect touchpoint (voice hangup, missed call, web-form submit, or LSA message) to the initial outbound automated response (SMS or voice drop).",
+      "formula": "T_First Outbound Touch (GHL) - T_Lead Inbound Creation"
+    },
+    {
+      "code_identifier": "SLA_COMPLIANCE_PCT",
+      "name": "Speed-to-Lead SLA Compliance Rate (< 5 Minutes)",
+      "definition": "The proportion of all inbound leads contacted and placed into conversational triage within the contractual 5-minute (300-second) performance threshold.",
+      "formula": "(Count of Leads with Response Delta <= 300s / Total Inbound Leads Received) * 100"
+    },
+    {
+      "code_identifier": "SLA_TECH_ACK_SEC",
+      "name": "Emergency Dispatch Acknowledgment Time",
+      "definition": "Includes the SLA_TECH_ACK_SEC metric code for the elapsed time between GHL identifying a qualified emergency lead after hours and an on-call field technician texting ACCEPT to secure dispatch.",
+      "formula": "T_Tech SMS Accept - T_Emergency Tag Applied"
+    }
+  ],
+  "field_map": {
+    "mappings": [
+      {
+        "source_system": "Google_LSA",
+        "source_field": "leadId",
+        "target_system": "GoHighLevel",
+        "target_field": "custom_fields.fld_lsa_lead_id",
+        "transformation": "direct_string_copy"
+      },
+      {
+        "source_system": "Google_LSA",
+        "source_field": "customerPhone",
+        "target_system": "GoHighLevel",
+        "target_field": "phone",
+        "transformation": "normalize_e164"
+      },
+      {
+        "source_system": "GoHighLevel",
+        "source_field": "pipeline_stage_id",
+        "target_system": "ServiceTitan",
+        "target_field": "estimate_status",
+        "transformation": "map_stage_id_to_servicetitan_status"
+      }
+    ]
+  },
+  "api_schemas": {
+    "request_schema": {
+      "type": "object",
+      "required": [
+        "api_key",
+        "timestamp",
+        "query_metrics"
+      ],
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "description": "Client authentication token for Apex operational intelligence API gateway."
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "query_metrics": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "response_schema": {
+      "type": "object",
+      "required": [
+        "status",
+        "code",
+        "data"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "success",
+            "error"
+          ]
+        },
+        "code": {
+          "type": "integer",
+          "example": 200
+        },
+        "data": {
+          "type": "object",
+          "required": [
+            "metric_results",
+            "execution_time_ms"
+          ],
+          "properties": {
+            "metric_results": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "code_identifier",
+                  "value"
+                ],
+                "properties": {
+                  "code_identifier": {
+                    "type": "string"
+                  },
+                  "value": {
+                    "type": "number"
+                  }
+                }
+              }
+            },
+            "execution_time_ms": {
+              "type": "integer",
+              "example": 118
+            }
+          }
+        }
+      }
+    }
+  },
+  "config_export": {
+    "dashboard_sync": {
+      "refresh_interval_seconds": 300,
+      "alert_webhooks_enabled": true,
+      "notification_channel": "slack-apex-operations",
+      "retry_budget_exhaustion_action": "trigger_pagerduty_incident",
+      "notes": "Mentions the client Apex Comfort Solutions"
+    }
+  }
+}

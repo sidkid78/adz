@@ -1,0 +1,10 @@
+role: full_stack_development_next_js
+total_runs: 2
+successes: 2
+failures: 0
+notes:
+- Always output a fully implemented, production-ready codebase in the specified path
+  to ensure successful photo categorization.
+- Store reusable photo categorization logic in modular utility functions before implementing
+  the main UI page component.
+last_updated: '2026-09-19T22:59:23.625438+00:00'

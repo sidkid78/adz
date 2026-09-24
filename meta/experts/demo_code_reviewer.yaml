@@ -1,0 +1,12 @@
+role: demo_code_reviewer
+total_runs: 3
+successes: 3
+failures: 0
+notes:
+- Ensure all database queries use parameterized inputs to prevent injection vulnerabilities
+  and pass validation checks.
+- Always verify that database queries use parameterization to ensure successful sanitization
+  audits.
+- Ensure all future database query sanitization audits verify that parameterized query
+  validations are maintained and consistently applied across all endpoints.
+last_updated: '2026-09-18T20:54:27.450292+00:00'

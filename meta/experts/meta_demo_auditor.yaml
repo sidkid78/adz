@@ -1,0 +1,14 @@
+role: meta_demo_auditor
+total_runs: 4
+successes: 4
+failures: 0
+notes:
+- Always verify UNIQUE constraints on webhook event IDs before confirming idempotency
+  compliance.
+- Always verify the `stripe_event_id` column has both a UNIQUE constraint and an index
+  to guarantee webhook idempotency.
+- Ensure the `stripe_event_id` column has a UNIQUE constraint and index applied to
+  guarantee duplicate event idempotency.
+- Always ensure the `stripe_event_id` column has both a UNIQUE constraint and an index
+  applied to guarantee duplicate event idempotency.
+last_updated: '2026-09-23T17:56:52.660255+00:00'

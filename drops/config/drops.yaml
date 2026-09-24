@@ -1,0 +1,27 @@
+# Drop Zone Reactive Configuration
+directories:
+  specs:
+    inbox: "drops/inbox/specs"
+    outbox: "drops/outbox/specs"
+    model: "gemini-3.1-pro-preview"
+    prompt: |
+      Decompose this planning/architecture document into atomically
+      scoped engineering tickets, one per subsystem.
+
+  finance:
+    inbox: "drops/inbox/finance"
+    outbox: "drops/outbox/finance"
+    model: "gemini-3.8-flash"
+    prompt: |
+      You are a precise finance categorizer. Process the input file,
+      extract all expenses, and output a categorized ledger.
+    validators:
+      - "uv run validators/csv-single-validator.py"
+
+  transcribers:
+    inbox: "drops/inbox/transcribers"
+    outbox: "drops/outbox/transcribers"
+    model: "gemini-3.5-flash-lite"
+    prompt: |
+      Analyze this raw transcript. Extract key action items and output
+      a markdown summary.

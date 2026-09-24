@@ -14,14 +14,26 @@ import os
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
+import sys
+from pathlib import Path
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
 from google import genai
 
-from ..hooks.hook_bus import HookBus, HookContext, HookEvent
-from ..hooks.hooks_library import log_notification, log_subagent_stop
-from ..hooks.agentic_loop import HookedAgent
+try:
+    from hooks.hook_bus import HookBus, HookContext, HookEvent
+    from hooks.hooks_library import log_notification, log_subagent_stop
+    from hooks.agentic_loop import HookedAgent
+except (ImportError, ValueError):
+    from ..hooks.hook_bus import HookBus, HookContext, HookEvent
+    from ..hooks.hooks_library import log_notification, log_subagent_stop
+    from ..hooks.agentic_loop import HookedAgent
 
 META_AGENT_MODEL = "gemini-3.1-pro-preview"   # planning-tier: deciding HOW to split work
-SUBAGENT_MODEL = "gemini-3.6-flash"    # workhorse-tier: each sub-agent's actual work
+SUBAGENT_MODEL = "gemini-3.8-flash"    # workhorse-tier: each sub-agent's actual work
 
 META_AGENT_SYSTEM_INSTRUCTION = """
 You are a meta-agent: you do not do the work yourself, you decide how

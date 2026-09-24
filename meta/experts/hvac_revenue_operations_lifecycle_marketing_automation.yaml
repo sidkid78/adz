@@ -1,0 +1,8 @@
+role: hvac_revenue_operations_lifecycle_marketing_automation
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Sync ServiceTitan open estimates with GoHighLevel via AWS Lambda to automate 24-hour
+  quote follow-ups and capture lost revenue.
+last_updated: '2026-09-18T22:06:42.039879+00:00'

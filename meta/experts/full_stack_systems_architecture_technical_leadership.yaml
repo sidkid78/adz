@@ -1,0 +1,8 @@
+role: full_stack_systems_architecture_technical_leadership
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Always generate complete SQL migration files with tables, RLS policies, and indexes
+  to ensure a robust initial database setup.
+last_updated: '2026-09-20T14:16:01.424822+00:00'

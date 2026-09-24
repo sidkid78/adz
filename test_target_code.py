@@ -1,13 +1,11 @@
-from test_target_code import add
 
+from target_code import add
 
 def test_int_addition():
     assert add(2, 3) == 5
 
-
 def test_string_number_addition():
     assert add("2", 3) == 5
-
 
 def test_invalid_input_raises():
     try:

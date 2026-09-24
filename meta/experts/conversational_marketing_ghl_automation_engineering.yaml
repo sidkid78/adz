@@ -1,0 +1,8 @@
+role: conversational_marketing_ghl_automation_engineering
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Maintain synchronized data mapping between GoHighLevel and ServiceTitan via AWS
+  Lambda middleware for reliable 24/7 speed-to-lead emergency HVAC automations.
+last_updated: '2026-09-18T22:05:24.518895+00:00'

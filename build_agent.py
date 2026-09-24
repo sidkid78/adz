@@ -25,7 +25,7 @@ Rules:
 class BuildAgent:
     """A thin wrapper around a single Gemini chat session."""
 
-    def __init__(self, model: str = "gemini-3.6-flash"):
+    def __init__(self, model: str = "gemini-3.8-flash"):
         client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
         self._chat = client.chats.create(model=model)
         # Prime the session once with its narrow job description.

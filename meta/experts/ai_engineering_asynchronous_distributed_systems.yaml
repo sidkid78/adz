@@ -1,0 +1,8 @@
+role: ai_engineering_asynchronous_distributed_systems
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Use modular Inngest functions with typed Supabase service clients to orchestrate
+  robust AI video generation and rendering pipelines.
+last_updated: '2026-09-20T14:05:45.394890+00:00'

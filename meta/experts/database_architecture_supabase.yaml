@@ -1,0 +1,14 @@
+role: database_architecture_supabase
+total_runs: 4
+successes: 4
+failures: 0
+notes:
+- Always verify the Supabase schema migration executes successfully and matches the
+  required data foundation specifications before finalizing.
+- Always create idempotent Supabase SQL migrations with complete table schemas, foreign
+  keys, indexes, and RLS policies in `supabase/migrations/`.
+- Maintain clean, idempotent SQL migration files with explicit foreign keys and Row
+  Level Security (RLS) policies for robust Supabase data foundations.
+- Ensure all foreign keys reference existing tables and explicit indexes are created
+  for performance on heavily queried columns.
+last_updated: '2026-09-19T05:07:38.023873+00:00'

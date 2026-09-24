@@ -1,0 +1,40 @@
+{
+  "slug": "quote_nurture_automation",
+  "kind": "markdown_document",
+  "artifact_name": "apex_quote_automation_spec",
+  "checks": [
+    {
+      "type": "required_sections",
+      "sections": [
+        "Workflow Architecture & Trigger/Exit Logic",
+        "Multi-Stage SMS & Email Sequence Copy",
+        "Objection-Handling Quick-Response Templates",
+        "Re-Engagement Routing & Automated Task-Creation Rules",
+        "Implementation Sign-Off Checklist"
+      ]
+    },
+    {
+      "type": "regex_present",
+      "pattern": "servicetitan_estimate_synced",
+      "description": "Must document the specific inbound webhook trigger from ServiceTitan"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "TACLB000123C",
+      "description": "Must include the specific Apex Comfort Solutions HVAC license number in email copy"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "quote-follow-up-active",
+      "description": "Must include the specific GHL tag used for workflow initialization"
+    },
+    {
+      "type": "min_table_rows",
+      "count": 4
+    },
+    {
+      "type": "fenced_blocks_parse"
+    }
+  ],
+  "test_code": null
+}

@@ -9,21 +9,18 @@ sandbox_connector_demo.py — the full Sandbox Connector flow
 5. Release the sandbox (destroyed — never reused for a different task).
 """
 
-from dotenv import load_dotenv 
-
-load_dotenv()
-
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from e2b import Sandbox
 
-from .sandbox_pool import SandboxPool
-from .git_worktree import create_worktree, remove_worktree, Worktree
-from test.hooks.hook_bus import HookBus, HookEvent
-from test.hooks.hooks_library import block_destructive_commands, make_sandbox_test_hook, log_stop, log_notification
-from .sandboxed_agent import SandboxedHookedAgent
-from test.hooks.sandbox_workflow import create_pull_request  # reused from the earlier lesson
+from sandbox_pool import SandboxPool
+from git_worktree import create_worktree, remove_worktree, Worktree
+from hook_bus import HookBus, HookEvent
+from hooks_library import block_destructive_commands, make_sandbox_test_hook, log_stop, log_notification
+from sandboxed_agent import SandboxedHookedAgent
+from sandbox_workflow import create_pull_request  # reused from the earlier lesson
+from factory_config import HOMEASE_REPO_URL, HOMEASE_BASE_BRANCH, HOMEASE_SETUP_COMMANDS
 
 
 def run_one_attempt(sbx: Sandbox, repo_path: str, branch: str, task: str, model: str) -> Worktree | None:
@@ -51,8 +48,11 @@ def run_one_attempt(sbx: Sandbox, repo_path: str, branch: str, task: str, model:
     return None
 
 
-def run_workflow(ticket: dict, model: str = "gemini-3.6-flash", n_racers: int = 3):
-    pool = SandboxPool(pool_size=1)  # just need one warm sandbox for this demo
+def run_workflow(ticket: dict, model: str = "gemini-3.8-flash", n_racers: int = 3):
+    pool = SandboxPool(
+        repo_url=HOMEASE_REPO_URL, base_branch=HOMEASE_BASE_BRANCH,
+        setup_commands=HOMEASE_SETUP_COMMANDS, pool_size=1,
+    )
     warm = pool.acquire()
 
     try:
@@ -93,6 +93,6 @@ if __name__ == "__main__":
         "title": "Fix off-by-one in pagination",
         "description": "The paginate(items, page_size) function returns one extra item on the last page.",
         "issue_number": 42,
-        "repo_full_name": "sidkid78/adz",
+        "repo_full_name": "your-org/your-repo",
     }
     run_workflow(example_ticket)
