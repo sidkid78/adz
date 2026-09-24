@@ -34,6 +34,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -338,12 +339,61 @@ def _run(cmd: list[str], cwd: Path, timeout: int = 900) -> subprocess.CompletedP
     # printed but not propagated, and .stdout/.stderr came back None.
     # The symptom was a TypeError concatenating None, three frames away
     # from the real cause.
-    return subprocess.run(
+    #
+    # Popen + an explicit tree kill, NOT subprocess.run(timeout=...). On
+    # a timeout, run() kills the direct child — here cmd.exe, because of
+    # shell=True — and then waits for the pipes to close with NO timeout.
+    # docker.exe, a grandchild, still held them: a wedged WSL left a
+    # `docker ps` hanging a build for as long as anyone let it, its
+    # 60-second timeout having fired and done nothing.
+    proc = subprocess.Popen(
         subprocess.list2cmdline(cmd) if os.name == "nt" else cmd,
-        cwd=cwd, capture_output=True, timeout=timeout,
+        cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace",
-        check=False, shell=(os.name == "nt"),
+        shell=(os.name == "nt"), start_new_session=(os.name != "nt"),
     )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            out, err = proc.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            # Something outside the tree still holds the pipes. Give up
+            # on the output rather than on the build.
+            out, err = "", ""
+        raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err) from None
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
+def _run_infra(cmd: list[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
+    """_run for docker and the supabase CLI: a timeout comes back as a
+    failed result instead of an exception, so every caller's existing
+    returncode check handles a wedged daemon. The "TIMEOUT after Ns"
+    wording matches INFRA_ERROR_PATTERNS, so the repair loop classifies
+    it as the environment's fault and blames no ticket."""
+    try:
+        return _run(cmd, cwd, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        return subprocess.CompletedProcess(
+            cmd, 124, exc.output or "",
+            f"TIMEOUT after {timeout}s: `{' '.join(cmd)}` did not answer — "
+            f"is Docker/WSL responding?\n{exc.stderr or ''}")
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill a process and everything it started. Same approach as
+    runtime_proof.py: taskkill /T on Windows, the process group elsewhere."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           capture_output=True, check=False, timeout=30)
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if proc.poll() is None:
+        proc.kill()
 
 
 class TargetRepo:
@@ -711,7 +761,11 @@ class TargetRepo:
         netstat is not enough — it missed bindings that Docker reported,
         and the first two port ranges chosen from netstat output collided
         with already-running projects."""
-        proc = _run(["docker", "ps", "--format", "{{.Ports}}"], self.path, timeout=60)
+        proc = _run_infra(["docker", "ps", "--format", "{{.Ports}}"], self.path, timeout=60)
+        # A failed `docker ps` must not read as "nothing is running": the
+        # empty set would pick 54321, the block other projects occupy.
+        if proc.returncode != 0:
+            raise RuntimeError(f"cannot list Docker ports: {(proc.stderr or '').strip()[:300]}")
         return {
             int(m) for m in re.findall(r"0\.0\.0\.0:(\d+)", proc.stdout or "")
         }
@@ -735,11 +789,14 @@ class TargetRepo:
         """Create config.toml and move the stack off any occupied ports."""
         config = self.path / "supabase" / "config.toml"
         if not config.exists():
-            proc = _run(["supabase", "init", "--force", "--workdir", "."], self.path, timeout=180)
+            proc = _run_infra(["supabase", "init", "--force", "--workdir", "."], self.path, timeout=180)
             if not config.exists():
                 return GateResult(False, (proc.stdout or "") + (proc.stderr or ""), "supabase init")
 
-        base = self.allocate_supabase_ports()
+        try:
+            base = self.allocate_supabase_ports()
+        except RuntimeError as exc:
+            return GateResult(False, str(exc), "docker ps")
         text = config.read_text(encoding="utf-8")
         # Re-map every 54xxx port into the free block, preserving offsets
         # so api/db/studio keep their usual relative positions.
@@ -752,7 +809,7 @@ class TargetRepo:
         return GateResult(True, f"supabase configured on the {base}-block")
 
     def supabase_start(self) -> GateResult:
-        proc = _run(["supabase", "start"], self.path, timeout=1200)
+        proc = _run_infra(["supabase", "start"], self.path, timeout=1200)
         output = (proc.stdout or "") + (proc.stderr or "")
         if proc.returncode != 0:
             return GateResult(False, output[-3000:], "supabase start")
@@ -811,7 +868,7 @@ class TargetRepo:
         reset = _run(DB_RESET, self.path, timeout=900)
         reset_out = (reset.stdout or "") + (reset.stderr or "")
 
-        proc = _run(["supabase", "gen", "types", "typescript", "--local"],
+        proc = _run_infra(["supabase", "gen", "types", "typescript", "--local"],
                     self.path, timeout=300)
         types = proc.stdout or ""
         if proc.returncode != 0 or "export type Database" not in types:
@@ -842,7 +899,7 @@ class TargetRepo:
         """Stop only THIS project's stack, by id. Never a bare
         `supabase stop`, which would take down every project running on
         the machine."""
-        _run(["supabase", "stop", "--project-id", self.name], self.path, timeout=300)
+        _run_infra(["supabase", "stop", "--project-id", self.name], self.path, timeout=300)
 
     # ---- the gate ----------------------------------------------------
     def run_gate(self, commands: list[list[str]], timeout: int = 600,
@@ -1060,7 +1117,7 @@ def _supabase_available(repo: "TargetRepo") -> tuple[bool, str]:
         return False, "supabase CLI not on PATH"
     if not _have("docker"):
         return False, "docker not on PATH"
-    proc = _run(["docker", "info"], repo.path, timeout=60)
+    proc = _run_infra(["docker", "info"], repo.path, timeout=60)
     if proc.returncode != 0:
         return False, "docker daemon not responding"
     if not (repo.path / "supabase" / "config.toml").exists():

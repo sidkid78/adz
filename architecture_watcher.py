@@ -244,7 +244,10 @@ class ArchitectureHandler(FileSystemEventHandler):
     def build(self, spec: Path, name: str) -> None:
         log_path = REPO_ROOT / "factory_runs" / f"watch_{name}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        cmd = [sys.executable, str(REPO_ROOT / "build_architecture.py"),
+        # -u: unbuffered. Redirected to a file, Python buffers stdout, and a
+        # build two minutes in showed a 0-byte log — indistinguishable from
+        # a hung one, which is exactly when someone opens it.
+        cmd = [sys.executable, "-u", str(REPO_ROOT / "build_architecture.py"),
                str(spec), "--build", "--fresh", "--repo-name", name]
         record("build_start", name=name, log=log_path.name)
         started = time.time()
@@ -262,7 +265,7 @@ class ArchitectureHandler(FileSystemEventHandler):
         gates each document. Passing ones land in drops/outbox/factory/."""
         log_path = REPO_ROOT / "factory_runs" / f"watch_{name}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        cmd = [sys.executable, str(REPO_ROOT / "run_factory.py"), str(execution), "--build"]
+        cmd = [sys.executable, "-u", str(REPO_ROOT / "run_factory.py"), str(execution), "--build"]
         record("document_build_start", name=name, log=log_path.name)
         started = time.time()
         with log_path.open("w", encoding="utf-8", newline="\n") as fh:
