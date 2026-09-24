@@ -332,6 +332,12 @@ which overwrites it. `test_target_code.py` + `check.sh` are the contract it must
 the tests to make a run pass. Note it does **not** currently pass its own `check.sh` (ruff TRY004);
 that is pre-existing. `factory_router.py` no longer writes to it — builds run in a temp workspace.
 
+**Client material never gets committed.** The repo is public and the factory runs real client
+engagements. `drops/inbox/` (what a client sent) and `drops/outbox/` (what was delivered) are
+gitignored, and a local `.git/hooks/pre-commit` refuses any staged path under them, `git add -f`
+included. Don't bypass it with `--no-verify`. Client specs imported into `specs/` get an explicit
+`.gitignore` line (see `edgecraft-revops`).
+
 ## Config files
 
 - `drops.yaml` — drop-zone definitions (inbox/outbox dir, model, prompt, optional validators) for
