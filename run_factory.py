@@ -25,6 +25,13 @@ Usage:
   python run_factory.py --build               # actually build (costs tokens)
   python run_factory.py --ticket 4 --build    # one ticket by number
   python run_factory.py --force-contracts     # re-author, ignore frozen ones
+  python run_factory.py --build --no-telemetry   # don't write factory_runs/
+
+Every --build run records events to factory_runs/<run_id>/events.jsonl —
+each attempt's verdict and the check that failed it — so the dashboard
+(`python factory_telemetry.py --serve`) shows document runs too. An
+escalated ticket's last draft and gate output are kept in
+factory_runs/<run_id>/escalated/, never in the outbox.
 
 Contract authoring is on by default because it is what makes the plan
 meaningful; BUILDING is opt-in because it is the expensive stage.
@@ -46,6 +53,7 @@ except ImportError:
     pass
 
 from artifact_agent import role_slug
+from factory_telemetry import RUN_END, RUN_START, NullRunLog, RunLog, new_run_id
 from spec_intake import ingest_path
 from ticket_contracts import ContractError, contract_for_ticket, load_contract, slug_for
 
@@ -77,6 +85,8 @@ def main() -> int:
     parser.add_argument("--force-contracts", action="store_true", help="re-author contracts even if frozen")
     parser.add_argument("--ticket", type=int, help="process a single ticket by its number in the listing")
     parser.add_argument("--limit", type=int, help="process at most N tickets")
+    parser.add_argument("--no-telemetry", action="store_true",
+                        help="do not write factory_runs/<id>/events.jsonl")
     args = parser.parse_args()
 
     if not args.target.exists():
@@ -107,6 +117,21 @@ def main() -> int:
 
     print(f"\n{'=' * 78}\n{len(tickets)} TICKET(S)\n{'=' * 78}")
 
+    # Only a build has attempts worth recording; --plan and contract-only
+    # runs leave no trace in factory_runs/, so they don't crowd the dashboard.
+    runlog: RunLog = NullRunLog()
+    if args.build and not args.no_telemetry:
+        runlog = RunLog(new_run_id(args.target.stem.split(".")[0]))
+        runlog.emit(RUN_START, factory="document", architecture=str(args.target),
+                    ticket_count=len(tickets), layers=[],
+                    tickets=[{"id": slug_for(t), "title": t["title"],
+                              "complexity": t.get("source_complexity"),
+                              "expertise": t.get("source_expertise"),
+                              "spec_chars": len(t["description"])} for t in tickets])
+        print(f"RUN LOG  : {runlog.events_path.relative_to(REPO_ROOT)}")
+    passed_ids: list[str] = []
+    failed_ids: list[str] = []
+
     accepted = refused = errored = built = escalated = 0
     kinds: dict[str, int] = {}
 
@@ -126,11 +151,16 @@ def main() -> int:
             contract = contract_for_ticket(ticket, force=args.force_contracts)
         except ContractError as exc:
             refused += 1
+            failed_ids.append(slug_for(ticket))
+            runlog.log(f"{slug_for(ticket)}: contract refused — {exc}", level="warn")
             print(f"    contract   : REFUSED — {exc}")
             print("                 -> escalated to a human; nothing built, nothing faked")
             continue
         except Exception as exc:  # noqa: BLE001 - one bad ticket must not abort the batch
             errored += 1
+            failed_ids.append(slug_for(ticket))
+            runlog.log(f"{slug_for(ticket)}: contract error — {type(exc).__name__}: {exc}",
+                       level="error")
             print(f"    contract   : ERROR — {type(exc).__name__}: {exc}")
             continue
 
@@ -148,15 +178,17 @@ def main() -> int:
 
         from factory_router import handle_ticket
 
-        result = handle_ticket(ticket, contract=contract)
+        result = handle_ticket(ticket, contract=contract, runlog=runlog)
         if result:
             built += 1
+            passed_ids.append(contract.slug)
             OUTBOX.mkdir(parents=True, exist_ok=True)
             out = OUTBOX / contract.artifact_filename
             out.write_text(result, encoding="utf-8", newline="\n")
             print(f"    result     : PASSED -> {out.relative_to(REPO_ROOT)}")
         else:
             escalated += 1
+            failed_ids.append(contract.slug)
             print("    result     : ESCALATED to human")
 
     # ---- Summary ------------------------------------------------------
@@ -172,6 +204,15 @@ def main() -> int:
             print(f"BUILDS   : {built} passed the gate, {escalated} escalated.")
             if built:
                 print(f"DELIVERED: {OUTBOX.relative_to(REPO_ROOT)}")
+            if not isinstance(runlog, NullRunLog):
+                runlog.emit(RUN_END, factory="document", built=passed_ids,
+                            failed=failed_ids, repaired=[],
+                            integration_passed=not failed_ids,
+                            integration_summary="document factory: per-ticket gates only")
+                print(f"RUN LOG  : {runlog.run_dir.relative_to(REPO_ROOT)}")
+                if escalated:
+                    print(f"ESCALATED: last drafts + gate output in "
+                          f"{(runlog.run_dir / 'escalated').relative_to(REPO_ROOT)}")
         else:
             print("BUILDS   : skipped (pass --build to run them).")
     print("=" * 78)

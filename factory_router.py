@@ -36,7 +36,9 @@ never executed, so it is graded locally — see needs_sandbox().
 import json
 import os
 import tempfile
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
@@ -45,6 +47,7 @@ from google import genai
 
 from artifact_agent import ArtifactBuildAgent, expert_for_ticket, system_prompt_for
 from artifact_kinds import KINDS, run_checks
+from factory_telemetry import TICKET_END, TICKET_START, NullRunLog, RunLog
 from ticket_contracts import ContractError, TicketContract, contract_for_ticket
 
 REPO_ROOT = Path(__file__).resolve().parent
@@ -213,41 +216,110 @@ def needs_sandbox(contract: TicketContract, route_says_sandbox: bool) -> bool:
     return route_says_sandbox and KINDS[contract.kind]["needs_test_code"]
 
 
+def failed_check(gate_log: str) -> tuple[str, str]:
+    """(check name, its detail) for the check that failed a gate run.
+
+    run_checks() short-circuits, so the failure is always the last
+    `== name ==` block. This is the one line a person needs when a ticket
+    escalates — and for a long time nobody saw it: the gate's verdict went
+    to the builder as feedback and nowhere else, so an escalated ticket
+    left no record of WHICH check it could not satisfy."""
+    blocks = gate_log.split("== ")
+    if len(blocks) < 2:
+        return "unknown", gate_log.strip()[:300]
+    name, _, detail = blocks[-1].partition(" ==\n")
+    detail = detail.split("\nFAILED on")[0].strip()
+    return name.strip(), detail[:300]
+
+
+@dataclass
+class BuildAttempt:
+    """What one racer produced. On failure, the last draft and the gate
+    output that rejected it travel back up, so an escalation hands the
+    human a near-miss and a reason instead of nothing."""
+    content: str | None
+    last_draft: str = ""
+    last_gate_log: str = ""
+    attempts: int = 0
+
+
 # ---- 3. One "racer": a single attempt to solve the ticket ------------
 def attempt_build(spec: str, build_model: str, use_sandbox: bool, max_retries: int,
-                  contract: TicketContract, system_instruction: str):
+                  contract: TicketContract, system_instruction: str,
+                  runlog: RunLog | None = None, racer: int = 0) -> BuildAttempt:
     """One full build-validate-repair loop against ONE frozen contract.
-    Returns the winning artifact contents, or None if it exhausts its
-    retries.
+    Returns the winning artifact contents in `.content`, or None there if
+    it exhausts its retries.
 
     The agent never sees the checks. It learns what the contract wants
-    only through the gate's rejection messages."""
+    only through the gate's rejection messages. Each verdict is also
+    printed and logged — the gate decides, but a person has to be able to
+    see what it decided."""
+    runlog = runlog or NullRunLog()
+    tag = f"racer {racer} " if racer else ""
     agent = ArtifactBuildAgent(
         model=build_model, contract=contract, system_instruction=system_instruction
     )
     content = agent.write(spec)
+    log = ""
 
     sandboxed = needs_sandbox(contract, use_sandbox)
     sbx = Sandbox.create(timeout=300) if sandboxed else None
     try:
-        for _ in range(max_retries):
+        for attempt in range(1, max_retries + 1):
+            start = time.time()
             if sandboxed:
                 passed, log = run_gate_in_sandbox(sbx, content, contract)
             else:
                 passed, log = run_gate_locally(content, contract)
+            duration = round(time.time() - start, 2)
 
             if passed:
-                return content
+                print(f"    {tag}attempt {attempt}/{max_retries}: PASSED")
+                runlog.attempt_end(contract.slug, attempt, "passed", duration=duration)
+                return BuildAttempt(content, content, log, attempt)
 
-            content = agent.fix(log)
-        return None
+            check, detail = failed_check(log)
+            print(f"    {tag}attempt {attempt}/{max_retries}: FAILED {check} — {detail}")
+            runlog.attempt_end(contract.slug, attempt, "failed", stage=check,
+                               detail=detail, duration=duration)
+
+            # No fix after the final verdict: nothing would ever grade it,
+            # so it was a model call spent on a draft nobody could use.
+            if attempt < max_retries:
+                content = agent.fix(log)
+        return BuildAttempt(None, content, log, max_retries)
     finally:
         if sbx:
             sbx.kill()
 
 
 # ---- 4. The router: dispatch based on ticket type ---------------------
-def handle_ticket(ticket: dict, contract: TicketContract | None = None):
+def save_escalation(runlog: RunLog, contract: TicketContract, best: BuildAttempt) -> Path | None:
+    """Keep what an escalated ticket got closest to, and why it stopped.
+
+    "Escalated to a human" used to mean the human received nothing: the
+    last draft and the gate output that rejected it were both discarded.
+    A near-miss is usually one missing section from done, so hand it over.
+    The draft is deliberately NOT written to the outbox — it failed its
+    gate, and the outbox is where passing artifacts are delivered."""
+    if isinstance(runlog, NullRunLog) or not best.last_draft:
+        return None
+    try:
+        folder = runlog.run_dir / "escalated"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / contract.artifact_filename).write_text(
+            best.last_draft, encoding="utf-8", newline="\n")
+        (folder / f"{contract.slug}.gate.txt").write_text(
+            best.last_gate_log, encoding="utf-8", newline="\n")
+        return folder
+    except OSError:  # telemetry never fails a build, and neither does this
+        return None
+
+
+def handle_ticket(ticket: dict, contract: TicketContract | None = None,
+                  runlog: RunLog | None = None):
+    runlog = runlog or NullRunLog()
     source_complexity = ticket.get("source_complexity")
 
     if source_complexity in COMPLEXITY_ROUTES:
@@ -315,36 +387,61 @@ def handle_ticket(ticket: dict, contract: TicketContract | None = None):
         except Exception as exc:  # noqa: BLE001 - learning must never fail a build
             print(f"(expert memory not updated: {type(exc).__name__}: {exc})")
 
+    started = time.time()
+    runlog.emit(TICKET_START, ticket=contract.slug, title=ticket["title"],
+                model=route["build_model"], artifact_kind=contract.kind,
+                files=[contract.artifact_filename], max_attempts=route["max_retries"],
+                racers=route["parallel_attempts"],
+                expert=expert.expertise.role if expert is not None else None)
+
+    def finish(best: BuildAttempt) -> str | None:
+        ok = best.content is not None
+        if ok:
+            print("--- PASSED ---")
+            record(True, best.content or "")
+            detail = ""
+        else:
+            check, why = failed_check(best.last_gate_log)
+            detail = f"{check}: {why}"
+            print(f"--- ESCALATED to human — last failure: {detail} ---")
+            # The expert learns from the gate's actual rejection. Given
+            # only "never satisfied within retry budget", it distilled the
+            # lesson "have realistic retry budgets" — true of everything,
+            # useful for nothing.
+            record(False, f"Final draft rejected by the gate.\n{best.last_gate_log}")
+            saved = save_escalation(runlog, contract, best)
+            if saved:
+                print(f"--- Last draft + gate output kept in {saved} ---")
+        runlog.emit(TICKET_END, ticket=contract.slug, ok=ok, attempts=best.attempts,
+                    duration=round(time.time() - started, 2), detail=detail)
+        return best.content
+
     n = route["parallel_attempts"]
     if n == 1:
-        result = attempt_build(spec, route["build_model"], route["use_sandbox"],
-                               route["max_retries"], contract, system_instruction)
-        outcome = "PASSED" if result else "ESCALATED to human"
-        print(f"--- {outcome} ---")
-        record(bool(result), result or "gate never satisfied within retry budget")
-        return result
+        return finish(attempt_build(spec, route["build_model"], route["use_sandbox"],
+                                    route["max_retries"], contract, system_instruction,
+                                    runlog))
 
     # HOTFIX path: race N sandboxes, take the first one that passes.
     # Every racer is graded against the SAME frozen contract — otherwise
     # "first to pass" would just mean "first to get the easiest tests".
     print(f"--- Racing {n} attempts in parallel ---")
+    last: BuildAttempt = BuildAttempt(None)
     with ThreadPoolExecutor(max_workers=n) as pool:
         futures = [
             pool.submit(attempt_build, spec, route["build_model"], route["use_sandbox"],
-                        route["max_retries"], contract, system_instruction)
-            for _ in range(n)
+                        route["max_retries"], contract, system_instruction, runlog, racer)
+            for racer in range(1, n + 1)
         ]
         for future in as_completed(futures):
-            result = future.result()
-            if result:
+            last = future.result()
+            if last.content:
                 print("--- First successful build won the race. Cancelling the rest. ---")
                 for f in futures:
                     f.cancel()  # best-effort; already-running ones finish naturally
-                record(True, result)
-                return result
-    print("--- All racers failed. Escalating to human. ---")
-    record(False, "all parallel racers exhausted their retries")
-    return None
+                return finish(last)
+    print("--- All racers failed. ---")
+    return finish(last)
 
 
 if __name__ == "__main__":
