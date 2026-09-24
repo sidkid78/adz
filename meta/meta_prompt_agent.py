@@ -66,7 +66,10 @@ def compile_worker_prompt(worker_role: str, required_tools: list[str], has_hooks
 
     if save_as:
         WORKER_PROMPTS_DIR.mkdir(exist_ok=True)
-        (WORKER_PROMPTS_DIR / f"{save_as}.md").write_text(compiled)
+        # Explicit utf-8: Windows defaults to cp1252, so an em dash was
+        # cached as byte 0x97 and the utf-8 read in artifact_agent.py
+        # crashed the NEXT run for that role — never the one that wrote it.
+        (WORKER_PROMPTS_DIR / f"{save_as}.md").write_text(compiled, encoding="utf-8", newline="\n")
 
     return compiled
 

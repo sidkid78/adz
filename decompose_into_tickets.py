@@ -57,6 +57,7 @@ def write_tickets_to_outbox(tickets: list[dict], outbox_dir: Path) -> list[Path]
     for i, ticket in enumerate(tickets, start=1):
         slug = ticket["title"].lower().replace(" ", "-")[:40]
         path = outbox_dir / f"{i:02d}-{slug}.md"
-        path.write_text(f"# {ticket['title']}\n\n{ticket['description']}\n")
+        path.write_text(f"# {ticket['title']}\n\n{ticket['description']}\n",
+                        encoding="utf-8", newline="\n")
         paths.append(path)
     return paths
