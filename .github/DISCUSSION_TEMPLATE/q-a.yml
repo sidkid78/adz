@@ -1,0 +1,41 @@
+title: "[Q&A] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Asking why a gate failed? A run ID and the gate transcript usually make it answerable
+        on the first reply. `--verbose` prints the transcript.
+  - type: dropdown
+    id: factory
+    attributes:
+      label: Which part of ADZ?
+      options:
+        - Software factory (build_architecture.py)
+        - Document factory (run_factory.py)
+        - Architecture watcher / import
+        - Meta layer (experts, meta-prompts, skills)
+        - Something else
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Question
+      description: What you're trying to do, and what happened instead.
+    validations:
+      required: true
+  - type: input
+    id: command
+    attributes:
+      label: Command you ran
+      placeholder: python build_architecture.py specs/<name>.architecture.json --build --verbose
+  - type: input
+    id: run_id
+    attributes:
+      label: Run ID
+      description: The folder name under factory_runs/, if there was a run.
+  - type: textarea
+    id: transcript
+    attributes:
+      label: Gate transcript / output
+      render: text

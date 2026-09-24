@@ -1,0 +1,30 @@
+title: "[Built] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Share a repo the factory built. The most useful posts say what broke on the way,
+        especially anything that passed a gate it should have failed.
+  - type: input
+    id: repo
+    attributes:
+      label: Generated repo
+      description: A link, if it's public.
+  - type: textarea
+    id: architecture
+    attributes:
+      label: Architecture
+      description: What it was meant to build — tickets, stack, and a link to the spec if you can share it.
+    validations:
+      required: true
+  - type: textarea
+    id: result
+    attributes:
+      label: Result
+      description: The build summary (tickets built, layers, integration gate verdict).
+      render: text
+  - type: textarea
+    id: lessons
+    attributes:
+      label: What broke along the way
+      description: Repairs, escalations, infra failures, and any defect no gate caught.
