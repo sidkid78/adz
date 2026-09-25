@@ -313,6 +313,36 @@ def reachable_files(repo: Path, harness: bool = True) -> set[Path]:
     return seen
 
 
+def untouched_scaffold_files(repo: Path) -> set[str]:
+    """Files still exactly as the scaffold committed them.
+
+    The scaffold ships src/index.ts (a placeholder only its smoke test
+    imports) into every project. In a Next app nothing should import it,
+    so it was an orphan in EVERY build — a failure no ticket could fix
+    honestly, and the one the reachability cheats kept trying to satisfy
+    (`import '../index'` in the root layout, `void _index` in a page).
+
+    The factory answers for what tickets built. A scaffold file nobody
+    has changed is not that; once a ticket modifies one, it is, and it
+    is checked like any other."""
+    import subprocess
+
+    def git(*args: str) -> str:
+        try:
+            proc = subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                                  text=True, encoding="utf-8", timeout=60, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return proc.stdout if proc.returncode == 0 else ""
+
+    roots = git("rev-list", "--max-parents=0", "HEAD").split()
+    if not roots:
+        return set()
+    seeded = set(git("ls-tree", "-r", "--name-only", roots[-1]).splitlines())
+    changed = set(git("diff", "--name-only", roots[-1]).splitlines())
+    return seeded - changed
+
+
 def check_reachability(repo_path: Path, owned: dict[str, str] | None = None
                        ) -> tuple[bool, str, list[str]]:
     """(passed, message, unreachable_paths).
@@ -363,6 +393,8 @@ def check_reachability(repo_path: Path, owned: dict[str, str] | None = None
     if owned is not None:
         # Only hold the factory responsible for files it built.
         orphans = [p for p in orphans if p in owned]
+    scaffold = untouched_scaffold_files(repo)
+    orphans = [p for p in orphans if p not in scaffold]
 
     if not orphans:
         return True, f"{len(reachable)} file(s) reachable from {len(entries)} entry point(s)", []
