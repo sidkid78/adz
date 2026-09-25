@@ -41,6 +41,7 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 REPO_ROOT = Path(__file__).resolve().parent
 WORKSPACE_ROOT = REPO_ROOT / "factory_workspace"
@@ -840,7 +841,38 @@ class TargetRepo:
         output = (proc.stdout or "") + (proc.stderr or "")
         if proc.returncode != 0:
             return GateResult(False, output[-3000:], "supabase start")
-        return GateResult(True, "supabase stack running")
+        wrote = self.write_supabase_env()
+        return GateResult(True, "supabase stack running" + (f"; {wrote}" if wrote else ""))
+
+    SUPABASE_ENV_KEYS: ClassVar[dict[str, str]] = {
+        "NEXT_PUBLIC_SUPABASE_URL": "API_URL",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "ANON_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY": "SERVICE_ROLE_KEY",
+    }
+
+    def write_supabase_env(self) -> str:
+        """Point the app at its own local stack, in .env.local.
+
+        Next inlines NEXT_PUBLIC_* at BUILD time, so a build made without
+        them has `undefined` baked into every Supabase client: the server
+        can never recognise a session, and a login-gated app can only
+        ever redirect to its login page. Every generated app shipped that
+        way, which is also why no gate had ever rendered one signed in.
+
+        Merged, never overwritten: other keys a person added (an API key
+        for the app's own model calls) survive. .env.local is gitignored
+        by the scaffold, so none of this is committed."""
+        proc = _run_infra(["supabase", "status", "-o", "env"], self.path, timeout=120)
+        status = dict(re.findall(r'^([A-Z_]+)="?([^"\n]*)"?', proc.stdout or "", re.MULTILINE))
+        values = {key: status[src] for key, src in self.SUPABASE_ENV_KEYS.items() if status.get(src)}
+        if len(values) < len(self.SUPABASE_ENV_KEYS):
+            return ""
+        path = self.path / ".env.local"
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        kept = [ln for ln in lines if ln.split("=", 1)[0].strip() not in values]
+        path.write_text("\n".join([*kept, *(f"{k}={v}" for k, v in values.items())]) + "\n",
+                        encoding="utf-8", newline="\n")
+        return ".env.local points at the local stack"
 
     DB_TYPES_PATH = "src/lib/database.types.ts"
 
@@ -1156,6 +1188,12 @@ INTEGRATION_STEPS = [
     Step("typecheck", TYPECHECK, lambda r: (True, "always"), timeout=600),
     Step("tests", TEST, lambda r: (True, "always"), timeout=600,
          assert_output=assert_tests_ran),
+    # Before `next build`, not last. Starting the stack writes the
+    # NEXT_PUBLIC_SUPABASE_* values into .env.local (write_supabase_env),
+    # and Next inlines them at build time; the runtime proof then renders
+    # pages signed in against the CURRENT schema. Run last, it left every
+    # build without a working Supabase client.
+    Step("supabase db reset", DB_RESET, _supabase_available, timeout=900, retries=2),
     Step("next build", NEXT_BUILD, _next_available, timeout=900),
     Step("route typegen", ROUTE_TYPEGEN, _next_available, timeout=600),
     # Supabase Edge Functions are Deno, not Node: they live outside
@@ -1195,7 +1233,6 @@ INTEGRATION_STEPS = [
     # for us and for nobody else. It found exactly that on its first
     # run: a lockfile out of sync with its own package.json.
     Step("clean install", CLEAN_INSTALL, _is_committed_repo, timeout=1800),
-    Step("supabase db reset", DB_RESET, _supabase_available, timeout=900, retries=2),
 ]
 
 

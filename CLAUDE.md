@@ -171,6 +171,15 @@ Tailwind never installed, and no `dev` script. Every one typechecked, built and 
   anything that only works because of accumulated workspace state (lockfile drift, gitignored
   files). Teardown uses `taskkill /T /F` on Windows — an orphaned dev server holding a port is
   how the next run fails mysteriously.
+- **Signed out, a login-gated app proves only its login page.** `signed_in_proof.py` (called
+  from `runtime_proof.py`) creates a throwaway user, seeds one row per table from PostgREST's
+  OpenAPI description, requests every static page with the `@supabase/ssr` session cookie, and
+  names the page's source file plus the server log on failure. It needs data, not just a
+  session: `rows.map(clientFn)` over an empty list never calls `clientFn`. It also needs the
+  Supabase env **at build time** — Next inlines `NEXT_PUBLIC_*` — so `supabase_start()` writes
+  `.env.local` (merged, gitignored) and `supabase db reset` runs *before* `next build`. Verified
+  by restoring the loogic dashboard's server-calls-client-function crash: the check fails on
+  `src/app/(dashboard)/page.tsx` with the real error.
 - **`visual_review.py` is the one model-checked step, and it is asymmetric.** A vision model reads
   the runtime-proof screenshot; a CRITICAL finding can fail an otherwise-green build, but its own
   "PASS" is discarded and recomputed from its findings, so it can never rescue a failed step.

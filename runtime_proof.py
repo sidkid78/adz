@@ -44,6 +44,7 @@ import signal
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -121,6 +122,10 @@ def check_routes(repo_path: Path, routes: tuple[str, ...] = ("/",),
         shell=(os.name == "nt"),
         start_new_session=(os.name != "nt"),
     )
+    # Drained continuously. Its error lines are the evidence when a page
+    # fails, and a pipe nobody reads fills up and stalls the server.
+    server_log: list[str] = []
+    threading.Thread(target=_drain, args=(proc, server_log), daemon=True).start()
 
     try:
         # Poll rather than sleep. A fixed sleep is either flaky or slow,
@@ -129,7 +134,8 @@ def check_routes(repo_path: Path, routes: tuple[str, ...] = ("/",),
         status = 0
         while time.time() < deadline:
             if proc.poll() is not None:
-                out = (proc.stdout.read() if proc.stdout else "") or ""
+                time.sleep(0.5)  # let the reader collect the last lines
+                out = "".join(server_log)
                 return False, f"server exited before answering (code {proc.returncode})\n{out[-2000:]}"
             status, _ = _get(base + "/")
             if status:
@@ -149,8 +155,22 @@ def check_routes(repo_path: Path, routes: tuple[str, ...] = ("/",),
                 # the route exists, the page is blank.
                 failures.append(f"{route} returned 200 but only {len(body.strip())} bytes of HTML")
 
+        # Signed out, a login-gated app proves only its login page. Render
+        # every page again as a signed-in user with a row in every table.
+        cookies = None
+        cleanup = None
+        if not failures:
+            from signed_in_proof import signed_in_check
+            signed_log, signed_failures, cookies, cleanup = signed_in_check(repo_path, base, server_log)
+            log.extend(signed_log)
+            failures.extend(signed_failures)
+
         _PAGE_ERRORS.clear()
-        shot = _screenshot(repo_path, base) if screenshot and not failures else ""
+        try:
+            shot = _screenshot(repo_path, base, cookies) if screenshot and not failures else ""
+        finally:
+            if cleanup:
+                cleanup()   # only now: the screenshot needed the user alive
         # A page that renders but throws is not working. React
         # reconciler crashes from a forced peer resolution land
         # here and nowhere else.
@@ -165,7 +185,13 @@ def check_routes(repo_path: Path, routes: tuple[str, ...] = ("/",),
         _terminate(proc)
 
 
-def _screenshot(repo_path: Path, base: str) -> str:
+def _drain(proc: subprocess.Popen, sink: list[str]) -> None:
+    if proc.stdout:
+        for line in proc.stdout:
+            sink.append(line.rstrip("\n"))
+
+
+def _screenshot(repo_path: Path, base: str, cookies: dict[str, str] | None = None) -> str:
     """Visual proof, captured with the FACTORY's Playwright.
 
     Not the target repo's. Screenshotting is a gate's job, so the
@@ -186,7 +212,12 @@ def _screenshot(repo_path: Path, base: str) -> str:
         with sync_playwright() as p:
             browser = p.chromium.launch()
             try:
-                page = browser.new_page(viewport={"width": 1440, "height": 900})
+                context = browser.new_context(viewport={"width": 1440, "height": 900})
+                if cookies:
+                    # Signed in: the visual review then judges the app a
+                    # user actually sees, not its login form.
+                    context.add_cookies([{"name": k, "value": v, "url": base} for k, v in cookies.items()])
+                page = context.new_page()
                 # An uncaught exception is how a forced dependency
                 # resolution actually shows up. `overrides` can make a
                 # peer conflict install cleanly, and if the version
