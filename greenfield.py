@@ -351,6 +351,10 @@ def _run(cmd: list[str], cwd: Path, timeout: int = 900) -> subprocess.CompletedP
         cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace",
         shell=(os.name == "nt"), start_new_session=(os.name != "nt"),
+        # Decoded as utf-8 above, so ask Python children to ENCODE as
+        # utf-8 too. Piped, they default to cp1252 on Windows, and every
+        # em dash in reachability.py's advice reached the agent as U+FFFD.
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
     try:
         out, err = proc.communicate(timeout=timeout)

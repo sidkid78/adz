@@ -151,6 +151,12 @@ Tailwind never installed, and no `dev` script. Every one typechecked, built and 
   and nothing imported them. "Is this module reachable from an entry point" is a question no
   compiler asks. It is the blind spot in first-writer-wins ownership — the DAG guarantees a
   ticket's dependencies *exist*, never that its output is *consumed*.
+  Repairs game it. After tests stopped counting as entry points, a repair wrote
+  `import * as X; void X` into a page, bare-imported pure modules from a route, and
+  `await import()`-ed them in `instrumentation.ts` — 286k tokens to make modules *look*
+  consumed. An import now counts only if a binding is really referenced, or (bare/discarded
+  dynamic import) the target has module-scope effects. When changing the check, re-run it over
+  every `factory_workspace/*` build: pm-mcp-server's self-registering tools must stay reachable.
 - **Toolchain is the scaffold's job, never a ticket's.** `write_files` refuses `package.json`, so
   a ticket *cannot* add Tailwind, a run script or a tsconfig. Anything in that class belongs in
   `greenfield.py`. When generated code assumes a tool (the frontend expert role is literally
