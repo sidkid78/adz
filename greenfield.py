@@ -674,8 +674,16 @@ class TargetRepo:
     # ---- writing changesets -----------------------------------------
     def write_files(self, files: dict[str, str],
                     allowed_roots: tuple[str, ...] | None = None,
-                    allow_new_tests: bool = True) -> list[str]:
+                    allow_new_tests: bool = True,
+                    protected: dict[str, str] | None = None) -> list[str]:
         """Write a changeset, enforcing the boundary BEFORE touching disk.
+
+        `protected` maps path -> who owns it (the scaffold, or another
+        ticket). A changeset may not touch those. An integration repair
+        once rewrote the scaffold's root layout, deleting its globals.css
+        import to make room for a reachability cheat, and the whole app
+        rendered unstyled. Every gate passed; the scaffold had no owner to
+        object. See protected_paths() in build_architecture.py.
 
         Three separate refusals:
           - escaping the repo entirely (../../etc);
@@ -719,6 +727,12 @@ class TargetRepo:
                     f"refusing to write outside {roots}: {rel} "
                     f"(toolchain config defines what the gate means and is not a ticket's to change)"
                 )
+            if protected and normalised in protected:
+                raise ValueError(
+                    f"refusing to modify {rel}: it belongs to {protected[normalised]}. "
+                    f"Change only the files your ticket owns; if another module has to "
+                    f"import yours, that is its owner's change, not yours."
+                )
             if (not allow_new_tests and normalised.startswith("tests/")
                     and not target.exists()):
                 raise ValueError(
@@ -734,6 +748,15 @@ class TargetRepo:
             target.write_text(content, encoding="utf-8", newline="\n")
             written.append(normalised)
         return written
+
+    def scaffold_paths(self) -> set[str]:
+        """Files the scaffold committed: the tree of the root commit."""
+        roots = _run(["git", "rev-list", "--max-parents=0", "HEAD"], self.path, timeout=60)
+        commits = (roots.stdout or "").split()
+        if roots.returncode != 0 or not commits:
+            return set()
+        tree = _run(["git", "ls-tree", "-r", "--name-only", commits[-1]], self.path, timeout=60)
+        return set((tree.stdout or "").splitlines())
 
     def read_file(self, rel: str) -> str | None:
         p = self.path / rel

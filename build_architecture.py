@@ -150,6 +150,20 @@ def failure_fingerprint(transcript: str) -> frozenset[str]:
     return frozenset(out)
 
 
+def protected_paths(repo: TargetRepo, owners: dict[str, str], tid: str) -> dict[str, str]:
+    """Files ticket `tid` may not touch: the scaffold's, and every file the
+    plan assigns to another ticket — built yet or not. A ticket's own
+    required files stay writable even when the scaffold seeded them
+    (pm-mcp-server's mcp_init legitimately owns src/index.ts).
+
+    Anything else — new helpers, the ticket's own tests — stays open, so
+    this never refuses a file only this ticket has ever written."""
+    mine = {p for p, owner in owners.items() if owner == tid}
+    guarded = {p: "the scaffold" for p in repo.scaffold_paths() if p not in mine}
+    guarded.update({p: f"ticket {owner}" for p, owner in owners.items() if owner != tid})
+    return guarded
+
+
 def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str],
                  verbose: bool = False, log=None, layer: int = 0,
                  ledger: "Ledger | None" = None) -> tuple[bool, str]:
@@ -190,6 +204,7 @@ def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str
 
     last_failure = "agent produced no parseable files"
     seen_failures: list[frozenset[str]] = []
+    guarded = protected_paths(repo, owners, ticket["id"])
     for attempt in range(1, route["max_attempts"] + 1):
         attempt_started = _time.time()
         # The call that produced `files` has already happened — either
@@ -205,7 +220,18 @@ def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str
             files = agent.repair(last_failure, contract)
             continue
 
-        written = repo.write_files(files)
+        # A refused write is a failed attempt the agent is told about, not a
+        # crash: write_files raising here used to take the whole run down.
+        try:
+            written = repo.write_files(files, protected=guarded)
+        except ValueError as refused:
+            last_failure = str(refused)
+            print(f"    attempt {attempt}: write refused ({refused})")
+            log.attempt_end(ticket["id"], attempt, "write_refused", detail=str(refused)[:300],
+                            duration=round(_time.time() - attempt_started, 2))
+            if attempt < route["max_attempts"]:
+                files = agent.repair(last_failure, contract)
+            continue
         ok, detail = validate_changeset(contract, repo, written)
         if ok:
             gate = repo.run_gate(contract.gate, log=log, ticket=ticket["id"])
@@ -300,7 +326,8 @@ def blame_tickets(failure: str, owners: dict[str, str]) -> list[str]:
 
 def repair_ticket(repo: TargetRepo, ticket: dict, contract, failure: str,
                   max_attempts: int = 3, log=None,
-                  ledger: "Ledger | None" = None) -> tuple[bool, str, dict]:
+                  ledger: "Ledger | None" = None,
+                  owners: dict[str, str] | None = None) -> tuple[bool, str, dict]:
     """Re-open a committed ticket to fix an integration failure.
 
     A fresh agent session, primed with the CURRENT contents of the files
@@ -354,7 +381,8 @@ def repair_ticket(repo: TargetRepo, ticket: dict, contract, failure: str,
         # A repair fixes code the gate rejected. It does not get to mint
         # new tests: that is how an earlier one "fixed" reachability.
         try:
-            repo.write_files(files, allow_new_tests=False)
+            repo.write_files(files, allow_new_tests=False,
+                             protected=protected_paths(repo, owners or {}, ticket["id"]))
         except ValueError as refused:
             files = ask(agent.repair, str(refused), contract)
             continue
@@ -644,7 +672,8 @@ def main() -> int:
             if tid not in contracts:
                 continue
             ok, detail, stats = repair_ticket(repo, tickets[tid], contracts[tid],
-                                              integration.transcript, log=log, ledger=ledger)
+                                              integration.transcript, log=log, ledger=ledger,
+                                              owners=owners)
             print(f"    repair {tid}: {'OK' if ok else 'FAILED'} — {detail} "
                   f"({stats['duration']:.0f}s: model {stats['model_seconds']:.0f}s, "
                   f"gate {stats['gate_seconds']:.0f}s, {stats['attempts']} attempt(s))")
