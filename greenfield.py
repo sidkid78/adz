@@ -833,6 +833,11 @@ class TargetRepo:
             lambda m: f"{m.group(1)}{base // 100}{m.group(2)}",
             text,
         )
+        # Analytics runs Logflare plus a Vector log shipper — about 550MB
+        # together, the heaviest thing in the stack — and nothing the
+        # factory does reads them. On a machine that also hosts the
+        # developer's own projects, that memory went to swap compression.
+        remapped = re.sub(r"(\[analytics\][^\[]*?enabled\s*=\s*)true", r"\1false", remapped, count=1)
         config.write_text(remapped, encoding="utf-8", newline="\n")
         return GateResult(True, f"supabase configured on the {base}-block")
 
