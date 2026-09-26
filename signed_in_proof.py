@@ -117,6 +117,8 @@ def page_routes(repo: Path) -> tuple[dict[str, str], list[str]]:
 
 # ---- Seeding ----------------------------------------------------------------
 _FK = re.compile(r"Foreign Key to `(\w+)\.(\w+)`")
+# Columns that name the row's owner, whose FK usually targets auth.users.
+_OWNER_COLUMN = re.compile(r"^(?:user|founder|owner|creator|author|member|account|profile)_id$")
 
 
 def _value(prop: dict, user_id: str) -> object:
@@ -133,7 +135,7 @@ def _value(prop: dict, user_id: str) -> object:
         return datetime.now(UTC).isoformat()
     if fmt == "date":
         return datetime.now(UTC).date().isoformat()
-    if fmt in ("integer", "bigint", "smallint", "numeric", "real", "double precision") or fmt.startswith("numeric"):
+    if fmt in ("integer", "bigint", "smallint", "int32", "int64", "numeric", "real", "double precision", "float", "double") or fmt.startswith("numeric"):
         return 1
     if fmt == "boolean":
         return False
@@ -172,9 +174,12 @@ def seed_rows(url: str, service_key: str, user_id: str) -> list[str]:
                         row[col] = seeded[fk.group(1)].get(fk.group(2))
                     elif col not in required or "default" in prop:
                         continue
-                    elif is_pk and (prop.get("format") == "uuid") and not fk:
-                        # A uuid key nobody generates is keyed on the user
-                        # (profiles reference auth.users, outside public).
+                    elif prop.get("format") == "uuid" and not fk and (is_pk or _OWNER_COLUMN.match(col)):
+                        # A uuid nobody generates, or an owner column, is keyed
+                        # on the user: its FK points at auth.users, which the
+                        # public schema description cannot show. Given a random
+                        # uuid, organizations.founder_id failed its FK and the
+                        # whole tree below it went unseeded.
                         row[col] = user_id
                     else:
                         row[col] = _value(prop, user_id)
@@ -182,6 +187,17 @@ def seed_rows(url: str, service_key: str, user_id: str) -> list[str]:
                 notes.append(f"seed: skipped {name} ({exc})")
                 del pending[name]
                 continue
+            # A sign-up trigger may already have made this user's row (the
+            # organization, a profile). Reuse it rather than add a second.
+            owner_cols = [c for c, v in row.items() if v == user_id]
+            if owner_cols:
+                _, _, got = _call("GET", f"{url}/rest/v1/{name}?{owner_cols[0]}=eq.{user_id}&limit=1", auth)
+                existing = json.loads(got) if got.strip().startswith("[") else []
+                if existing:
+                    seeded[name] = existing[0]
+                    del pending[name]
+                    progressed = True
+                    continue
             status, _, body = _call(
                 "POST", f"{url}/rest/v1/{name}",
                 {**auth, "Prefer": "return=representation,resolution=ignore-duplicates"}, row)
