@@ -157,6 +157,15 @@ Tailwind never installed, and no `dev` script. Every one typechecked, built and 
   consumed. An import now counts only if a binding is really referenced, or (bare/discarded
   dynamic import) the target has module-scope effects. When changing the check, re-run it over
   every `factory_workspace/*` build: pm-mcp-server's self-registering tools must stay reachable.
+  **Stop patching cheats one pattern at a time; the incentive was the bug.** Repairs kept finding
+  new ways (namespaces in an array rendered as `{deps.length}` in a hidden div, whole invented
+  pages, `as ComponentType<{}>`) because the architecture gave the modules no page and the loop
+  demanded reachability anyway. So: repairs may not create new pages/routes/layouts
+  (`allow_new_entry_points=False`); reachability failures are repaired only by tickets that own
+  an existing entry point; what remains is printed as an **ARCHITECTURE GAP** for the human and
+  the next orch2 prompt; `import * as X` counts only if `X.member` is read; and repairs face the
+  same `pregate_violation()` checks as first builds (never-casts, prop-erasing casts,
+  non-function exports from `"use server"` files).
 - **Toolchain is the scaffold's job, never a ticket's.** `write_files` refuses `package.json`, so
   a ticket *cannot* add Tailwind, a run script or a tsconfig. Anything in that class belongs in
   `greenfield.py`. When generated code assumes a tool (the frontend expert role is literally

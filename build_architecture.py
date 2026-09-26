@@ -56,6 +56,7 @@ from changesets import (
     ModelUnavailable,
     contract_for_ticket,
     deliverable_kind,
+    pregate_violation,
     specified_but_unowned,
     validate_changeset,
 )
@@ -342,6 +343,38 @@ def blame_tickets(failure: str, owners: dict[str, str]) -> list[str]:
     return blamed
 
 
+def reachability_report(transcript: str) -> tuple[list[str], list[str]]:
+    """(orphaned files, entry points searched) from reachability.py's output."""
+    orphans = re.findall(r"UNREACHABLE\s+(\S+)", transcript)
+    block = transcript.split("Entry points searched:", 1)[-1] if "Entry points searched:" in transcript else ""
+    entries = []
+    for line in block.splitlines()[1:]:
+        if not line.strip():
+            break
+        entries.append(line.strip())
+    return orphans, entries
+
+
+def report_architecture_gap(transcript: str, owners: dict[str, str], log) -> None:
+    """Modules the build produced that no specified page or route uses.
+
+    Repairs used to "fix" this by inventing pages — a schema ticket's
+    repair wrote the home page, hiding six namespace imports in an array.
+    That is not a code defect a repair can honestly close: the architecture
+    never said where those modules are used. Say so, and name them, so the
+    next architecture can."""
+    orphans, _ = reachability_report(transcript)
+    if not orphans:
+        return
+    print(f"\n{'=' * 78}\nARCHITECTURE GAP — built, but no specified page or route uses it\n{'=' * 78}")
+    for path in orphans:
+        print(f"  {path}   (built by {owners.get(path, 'the scaffold')})")
+    print("  The architecture needs a page or route that calls each of these, or they\n"
+          "  should not be built. Add it to the orch2 prompt; the factory does not invent it.")
+    log.log(f"architecture gap: {len(orphans)} unreachable module(s): {', '.join(orphans)}",
+            level="warn")
+
+
 def _route_of(path: str) -> str | None:
     """The URL a src/app page or route file serves, or None. Route groups
     `(x)` and slots `@x` are not part of the URL."""
@@ -409,10 +442,19 @@ def repair_ticket(repo: TargetRepo, ticket: dict, contract, failure: str,
         # A repair fixes code the gate rejected. It does not get to mint
         # new tests: that is how an earlier one "fixed" reachability.
         try:
-            repo.write_files(files, allow_new_tests=False,
-                             protected=protected_paths(repo, owners or {}, ticket["id"]))
+            written = repo.write_files(files, allow_new_tests=False, allow_new_entry_points=False,
+                                       protected=protected_paths(repo, owners or {}, ticket["id"]))
         except ValueError as refused:
             files = ask(agent.repair, str(refused), contract)
+            continue
+        # The checks a first build faces. Repairs skipped them, and a repair
+        # then shipped `as ComponentType<{}>` to render a component without
+        # its data — compiling, and crashing at prerender.
+        cheat = pregate_violation(repo, written)
+        if cheat:
+            repo.revert_uncommitted()
+            if attempt < max_attempts:
+                files = ask(agent.repair, cheat, contract)
             continue
         t0 = _time.time()
         gate = repo.run_gate(PER_TICKET_GATE, log=log, ticket=f"{ticket['id']} (repair)")
@@ -732,7 +774,19 @@ def main() -> int:
             print(f"    {integration.failed} failed after its retries; the code is unchanged.")
             print("    Re-run the integration gate once the environment is healthy.")
             break
-        blamed = blame_tickets(integration.transcript, owners)
+        if integration.failed == "reachability":
+            # Only a ticket that owns an existing page or route can make a
+            # module reachable honestly — by calling it. The orphan's own
+            # owner cannot touch those files, so repairing it only buys
+            # another cheat (one burned 314s trying).
+            _orphans, entries = reachability_report(integration.transcript)
+            blamed = sorted({owners[p] for p in entries if p in owners}
+                            & set(contracts))
+            if not blamed:
+                print("    no ticket owns a page or route that could use the orphaned modules")
+                break
+        else:
+            blamed = blame_tickets(integration.transcript, owners)
         if not blamed:
             print("    no ticket owns a file named in the failure — cannot auto-repair")
             print(integration.transcript[-2000:])
@@ -764,6 +818,8 @@ def main() -> int:
 
     if not integration.passed:
         print(integration.transcript[-2500:])
+    if not integration.passed and integration.failed == "reachability":
+        report_architecture_gap(integration.transcript, owners, log)
 
     print(f"\n{'=' * 78}")
     print(f"BUILT    : {len(passed)}/{len(passed) + len(failed)} tickets — {', '.join(passed) or 'none'}")

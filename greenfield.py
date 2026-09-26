@@ -676,6 +676,7 @@ class TargetRepo:
     def write_files(self, files: dict[str, str],
                     allowed_roots: tuple[str, ...] | None = None,
                     allow_new_tests: bool = True,
+                    allow_new_entry_points: bool = True,
                     protected: dict[str, str] | None = None) -> list[str]:
         """Write a changeset, enforcing the boundary BEFORE touching disk.
 
@@ -733,6 +734,16 @@ class TargetRepo:
                     f"refusing to modify {rel}: it belongs to {protected[normalised]}. "
                     f"Change only the files your ticket owns; if another module has to "
                     f"import yours, that is its owner's change, not yours."
+                )
+            if not allow_new_entry_points and not target.exists() and ENTRY_POINT_RE.match(normalised):
+                # Repairs invented most of one app's pages — a schema
+                # ticket's repair wrote the home page — each existing only
+                # to import orphaned modules. A page nobody specified is an
+                # architecture gap, and it goes to a human.
+                raise ValueError(
+                    f"refusing to create a new entry point during a repair: {rel} "
+                    f"(a page, route or layout the architecture did not specify is a gap "
+                    f"to report, not something a repair invents to make a module reachable)"
                 )
             if (not allow_new_tests and normalised.startswith("tests/")
                     and not target.exists()):
@@ -1286,6 +1297,14 @@ class IntegrationResult:
         if self.failed:
             parts.append(f"FAILED at {self.failed}")
         return ", ".join(parts)
+
+
+# Files a framework or runtime loads by name — what reachability walks from.
+ENTRY_POINT_RE = re.compile(
+    r"^(?:src/app/(?:.+/)?(?:page|route|layout|template|loading|error|not-found|global-error|default)\.tsx?"
+    r"|(?:src/)?(?:middleware|instrumentation)\.ts"
+    r"|supabase/functions/[^/]+/index\.ts"
+    r"|src/scripts/.+\.ts)$")
 
 
 def safe_console() -> None:

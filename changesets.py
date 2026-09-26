@@ -400,15 +400,47 @@ def validate_changeset(contract: ChangesetContract, repo, written: list[str]) ->
     if broken:
         return False, broken
 
-    silenced = casts_to_never(repo, written)
-    if silenced:
-        return False, silenced
-
-    server_values = server_action_values(repo, written)
-    if server_values:
-        return False, server_values
+    refused = pregate_violation(repo, written)
+    if refused:
+        return False, refused
 
     return True, f"{len(contract.required_paths)} required file(s) present"
+
+
+def pregate_violation(repo, written: list[str]) -> str | None:
+    """Code that compiles but defeats the checks. Shared by first builds and
+    integration repairs: repairs used to skip it, and one shipped a page
+    that cast a component to ComponentType<{}> to render it without its
+    required data."""
+    for check in (casts_to_never, erased_props, server_action_values):
+        problem = check(repo, written)
+        if problem:
+            return problem
+    return None
+
+
+_ERASED_PROPS = re.compile(
+    r"\bas\s+(?:unknown\s+as\s+)?(?:React\.)?(?:ComponentType|FC|FunctionComponent|ComponentClass)"
+    r"\s*<\s*(?:\{\s*\}|any|unknown|never)\s*>")
+
+
+def erased_props(repo, written: list[str]) -> str | None:
+    """A component cast to one that takes no props — the compiler silenced.
+
+    `mod as ComponentType<{}>` let a repair render <DagVisualizer /> with no
+    `nodes`; tsc agreed, and the page crashed at prerender on nodes.filter.
+    Same family as casting to `never`: the cast exists to stop the type
+    system describing the component."""
+    for path in written:
+        if not path.endswith((".ts", ".tsx")):
+            continue
+        for n, line in enumerate((repo.read_file(path) or "").splitlines(), 1):
+            m = _ERASED_PROPS.search(line)
+            if m:
+                return (f"{path}:{n} casts a component to one without props: {m.group(0)}\n"
+                        f"That hides the props the component requires, so it renders without its "
+                        f"data and fails at runtime. Pass the props it declares instead.")
+    return None
 
 
 _USE_SERVER = re.compile(r"\A(?:\s*(?://[^\n]*|/\*.*?\*/))*\s*['\"]use server['\"]", re.DOTALL)

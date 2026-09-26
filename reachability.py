@@ -164,6 +164,19 @@ def _bindings(clause: str) -> list[str]:
     return [n for n in names if re.fullmatch(_IDENT, n)]
 
 
+def _namespace_member_used(name: str, body: str) -> bool:
+    """For `import * as X`: is anything IN the module read — `X.fn()`,
+    `<X.Card/>`, `X["k"]`? A namespace that is only mentioned as a whole
+    reads nothing from the module.
+
+    That is the shape of every repair cheat that outlived the `void X`
+    rule: six namespaces pushed into an array and rendered as
+    `{dependencies.length}` in a hidden div, commented "so the imports are
+    not elided ... they become reachable". Mentioning a namespace is free;
+    using a module means reaching into it."""
+    return re.search(rf"(?<![\w$]){re.escape(name)}\s*(?:\?\.|\.|\[)", body) is not None
+
+
 def _is_used(name: str, body: str) -> bool:
     """Referenced anywhere except as the operand of `void`."""
     mention = re.compile(rf"(?<![\w$]){re.escape(name)}(?![\w$])")
@@ -202,7 +215,14 @@ def live_specifiers(text: str, importer: Path, repo: Path) -> list[str]:
     dead: set[tuple[int, int]] = set()
     body = _BINDING_IMPORT_RE.sub(lambda m: " " * len(m.group(0)), text)
     for m in _BINDING_IMPORT_RE.finditer(text):
-        names = _bindings(m.group("clause"))
+        clause = m.group("clause")
+        names = _bindings(clause)
+        namespace = re.search(r"\*\s*as\s+(" + _IDENT + ")", clause)
+        if namespace and not _namespace_member_used(namespace.group(1), body):
+            names = [n for n in names if n != namespace.group(1)]
+            if not names:
+                dead.add(m.span())
+                continue
         if names and not any(_is_used(n, body) for n in names):
             dead.add(m.span())
     for m in [*_BARE_IMPORT_RE.finditer(text), *_DISCARDED_DYNAMIC_RE.finditer(text)]:
@@ -423,9 +443,12 @@ def check_reachability(repo_path: Path, owned: dict[str, str] | None = None
         " that re-exports them: only the entry points listed above are"
         " searched. Neither does an import nothing uses — `import * as X`"
         " followed by `void X`, or a bare `import \"./x\"` of a module that"
-        " only declares things. The entry point has to CALL the module. If"
-        " a module has no entry point that should own it, the missing thing"
-        " is the entry point — write that."
+        " only declares things, and neither does `import * as X` when nothing"
+        " reads `X.something`. An existing page or route has to CALL the"
+        " module.\n\n"
+        "Do NOT create a new page, route or layout to host it: if no"
+        " existing entry point should use the module, that is a gap in the"
+        " architecture, and it is reported to a human rather than repaired."
     )
     lines += ["", advice]
     return False, "\n".join(lines), orphans
