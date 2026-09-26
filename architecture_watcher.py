@@ -42,6 +42,7 @@ Usage:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -64,6 +65,9 @@ DEFAULT_WATCH_DIR = Path(
 )
 SPECS_DIR = REPO_ROOT / "specs"
 LEDGER = REPO_ROOT / "factory_runs" / "watcher.jsonl"
+# Builds write to a log file, where Windows would default to cp1252 and
+# crash on the first "▲" in next build's output.
+_UTF8_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8"}
 
 # How long a file's size must hold steady before it is considered written.
 STABLE_SECONDS = 4.0
@@ -252,7 +256,7 @@ class ArchitectureHandler(FileSystemEventHandler):
         record("build_start", name=name, log=log_path.name)
         started = time.time()
         with log_path.open("w", encoding="utf-8", newline="\n") as fh:
-            proc = subprocess.run(cmd, cwd=REPO_ROOT, stdout=fh,
+            proc = subprocess.run(cmd, cwd=REPO_ROOT, stdout=fh, env=_UTF8_ENV,
                                   stderr=subprocess.STDOUT, check=False)
         record("build_end", name=name, exit=proc.returncode,
                seconds=int(time.time() - started),
@@ -269,7 +273,7 @@ class ArchitectureHandler(FileSystemEventHandler):
         record("document_build_start", name=name, log=log_path.name)
         started = time.time()
         with log_path.open("w", encoding="utf-8", newline="\n") as fh:
-            proc = subprocess.run(cmd, cwd=REPO_ROOT, stdout=fh,
+            proc = subprocess.run(cmd, cwd=REPO_ROOT, stdout=fh, env=_UTF8_ENV,
                                   stderr=subprocess.STDOUT, check=False)
         record("document_build_end", name=name, exit=proc.returncode,
                seconds=int(time.time() - started),

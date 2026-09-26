@@ -77,6 +77,8 @@ def route_preview(ticket: dict) -> str:
 
 
 def main() -> int:
+    from greenfield import safe_console
+    safe_console()
     parser = argparse.ArgumentParser(description="Run the ADZ factory over a spec file or directory")
     parser.add_argument("target", nargs="?", type=Path, default=REPO_ROOT / "specs",
                         help="spec file or directory (default: specs/)")

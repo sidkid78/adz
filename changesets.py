@@ -404,7 +404,46 @@ def validate_changeset(contract: ChangesetContract, repo, written: list[str]) ->
     if silenced:
         return False, silenced
 
+    server_values = server_action_values(repo, written)
+    if server_values:
+        return False, server_values
+
     return True, f"{len(contract.required_paths)} required file(s) present"
+
+
+_USE_SERVER = re.compile(r"\A(?:\s*(?://[^\n]*|/\*.*?\*/))*\s*['\"]use server['\"]", re.DOTALL)
+# What a "use server" module may export: async functions (declared or as an
+# async arrow), and types, which are erased before Next ever looks.
+_ALLOWED_SERVER_EXPORT = re.compile(
+    r"^export\s+(?:default\s+)?(?:async\s+function\b|type\b|interface\b|\{|\*)"
+    r"|^export\s+(?:const|let)\s+\w+\s*(?::[^=]+)?=\s*async\b")
+
+
+def server_action_values(repo, written: list[str]) -> str | None:
+    """A "use server" file that exports anything but async functions.
+
+    Next turns every export of such a file into a server action, so it
+    refuses a constant or schema at BUILD time — "A 'use server' file can
+    only export async functions, found object" — while `tsc` and vitest
+    pass it without comment. It first surfaced at the integration gate,
+    reported against a route rather than a file, where nothing could blame
+    it. Caught here it costs one attempt, with the file and line named."""
+    for path in written:
+        if not path.endswith((".ts", ".tsx")):
+            continue
+        text = repo.read_file(path) or ""
+        if not _USE_SERVER.match(text):
+            continue
+        bad = [(n, line.strip()) for n, line in enumerate(text.splitlines(), 1)
+               if line.startswith("export") and not _ALLOWED_SERVER_EXPORT.match(line)]
+        if bad:
+            n, line = bad[0]
+            return (f'{path}:{n} exports a non-function from a "use server" file: {line[:90]}\n'
+                    f"Next makes every export of a \"use server\" module a server action and "
+                    f"refuses anything but async functions at build time — tsc does not "
+                    f"notice. Move constants, schemas and types into a separate module "
+                    f"and import them from there ({len(bad)} such export(s) in this file).")
+    return None
 
 
 _NEVER_CAST = re.compile(r"as\s+(?:unknown\s+as\s+)?never\b")

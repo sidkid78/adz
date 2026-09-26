@@ -1284,6 +1284,36 @@ class IntegrationResult:
         return ", ".join(parts)
 
 
+def safe_console() -> None:
+    """Never let printing a transcript kill a build.
+
+    Tool output is full of characters cp1252 cannot encode — `next build`
+    opens with "▲" — and a factory that crashes while REPORTING a failure
+    loses the report. Redirected output (the watcher's build logs) becomes
+    utf-8; an interactive console keeps its encoding but replaces what it
+    cannot show."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream.isatty():
+                stream.reconfigure(errors="replace")
+            else:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+_MIGRATION_ERROR = re.compile(
+    r"Applying migration (\S+\.sql)\.\.\.(?:(?!Applying migration).)*?(?:MigrationApplyError|SQLSTATE|\bERROR:)",
+    re.DOTALL)
+
+
+def failed_migration(transcript: str) -> str | None:
+    """The migration a `supabase start`/`db reset` choked on, as a repo path
+    (so blame can find its owner) — or None when the failure was not SQL."""
+    m = _MIGRATION_ERROR.search(transcript or "")
+    return f"supabase/migrations/{m.group(1)}" if m else None
+
+
 def run_integration(repo: "TargetRepo", steps: list[Step] | None = None,
                     start_supabase: bool = True, log=None) -> IntegrationResult:
     """Run the integration steps, reporting skips as skips.
@@ -1311,6 +1341,18 @@ def run_integration(repo: "TargetRepo", steps: list[Step] | None = None,
         if step.name == "supabase db reset" and start_supabase:
             started = repo.supabase_start()
             transcript.append(f"== supabase start ==\n{started.transcript[-600:]}")
+            bad = failed_migration(started.transcript) if not started.passed else None
+            if bad:
+                # A migration that does not apply is the CODE failing, not
+                # the environment. Reported as a skip, it was invisible: a
+                # migration creating a function in the protected `auth`
+                # schema was "SKIPPED" twice, and the tickets after it wrote
+                # against a Database type that never got generated.
+                detail = f"MIGRATION FAILED: {bad}\n{started.transcript[-3000:]}"
+                if log:
+                    log.integration_step(step.name, "fail", 0.0, f"migration {bad}", detail)
+                return IntegrationResult(False, ran, skipped, f"{step.name} (migration)",
+                                         "\n".join([*transcript, detail]), infra=False)
             if not started.passed:
                 skipped.append((step.name, "supabase start failed"))
                 if log:

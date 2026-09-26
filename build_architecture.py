@@ -72,7 +72,9 @@ from greenfield import (
     PER_TICKET_GATE,
     TargetRepo,
     deno_check_cmd,
+    failed_migration,
     run_integration,
+    safe_console,
 )
 from import_architecture import build_order
 
@@ -318,6 +320,15 @@ def blame_tickets(failure: str, owners: dict[str, str]) -> list[str]:
     # that caused them. That path mirrors the source one, so rewriting it
     # back is what lets the failure reach the ticket that owns the route.
     normalised = normalised.replace(".next/types/app/", "src/app/")
+    # `next build` names ROUTES, not files: "Failed to collect page data
+    # for /api/boardroom/debate". With no path in the transcript, blame
+    # found nobody and a fixable failure stopped the run. Map each route
+    # it names back to the page/route file that serves it.
+    named_routes = set(re.findall(r"(?:data|configuration) for (/[\w\-/\[\]]*)", normalised))
+    if named_routes:
+        for path in owners:
+            if _route_of(path) in named_routes:
+                normalised += f"\n{path}"
     for path, owner in owners.items():
         if owner in blamed:
             continue
@@ -329,6 +340,16 @@ def blame_tickets(failure: str, owners: dict[str, str]) -> list[str]:
         if path in normalised or stem in normalised:
             blamed.append(owner)
     return blamed
+
+
+def _route_of(path: str) -> str | None:
+    """The URL a src/app page or route file serves, or None. Route groups
+    `(x)` and slots `@x` are not part of the URL."""
+    m = re.match(r"src/app/(.*?)/?(?:page|route)\.tsx?$", path)
+    if not m:
+        return None
+    segments = [s for s in m.group(1).split("/") if s and not s.startswith(("(", "@"))]
+    return "/" + "/".join(segments)
 
 
 def repair_ticket(repo: TargetRepo, ticket: dict, contract, failure: str,
@@ -407,6 +428,7 @@ def repair_ticket(repo: TargetRepo, ticket: dict, contract, failure: str,
 
 
 def main() -> int:
+    safe_console()
     ap = argparse.ArgumentParser(description="Build an orch2 technical architecture into a repo")
     ap.add_argument("architecture", type=Path, help="specs/<name>.architecture.json")
     ap.add_argument("--build", action="store_true", help="actually build (costs tokens)")
@@ -655,6 +677,27 @@ def main() -> int:
         ):
             with log.timed("db types", phase="supabase gen types"):
                 started = repo.supabase_start()
+                # A migration that fails to apply is the schema ticket's bug,
+                # and every later ticket pays for it: with no generated
+                # Database type, rows resolve to `never` (28 errors in a
+                # ticket that did nothing wrong). Repair it NOW, then retry.
+                bad = failed_migration(started.transcript) if not started.passed else None
+                owner = owners.get(bad or "")
+                if bad and owner in contracts:
+                    print(f"db types : migration {bad} does not apply — repairing {owner}")
+                    try:
+                        ok, detail, stats = repair_ticket(
+                            repo, tickets[owner], contracts[owner], started.transcript,
+                            log=log, ledger=ledger, owners=owners)
+                    except ModelUnavailable as exc:
+                        repo.revert_uncommitted()
+                        ok, detail = False, f"model API unavailable (infrastructure): {exc}"
+                        stats = {"duration": 0.0, "model_seconds": 0.0,
+                                 "gate_seconds": 0.0, "attempts": 0}
+                    log.repair(owner, 0, ok, detail, **stats)
+                    print(f"    repair {owner}: {'OK' if ok else 'FAILED'} — {detail}")
+                    if ok:
+                        started = repo.supabase_start()
                 gen = repo.generate_db_types() if started.passed else started
             if gen.passed:
                 print(f"db types : OK — {gen.transcript}")
