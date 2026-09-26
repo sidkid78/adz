@@ -566,6 +566,7 @@ DB_TYPES_PATH = "src/lib/database.types.ts"
 
 
 API_RETRY_DELAYS = (5, 20, 60)   # seconds between attempts on a transient failure
+API_TIMEOUT_S = 600              # one call; a pro-tier repair with high thinking takes minutes, not hours
 
 # Named by class so no SDK-internal module has to be imported to check them.
 _TRANSIENT_ERROR_NAMES = {
@@ -616,6 +617,10 @@ class ChangesetAgent:
         with nothing wrong in any code. The SDK's own retries did not cover
         a mid-response reset. Only failures that say nothing about the
         request are retried; a 400 or an auth error surfaces at once."""
+        # Without a timeout a connection that goes silent — no reset, no
+        # error — waits forever: a build sat 90 minutes inside one repair's
+        # SSL read. A timeout turns that into an error the retries handle.
+        kwargs.setdefault("timeout", API_TIMEOUT_S)
         for delay in (*API_RETRY_DELAYS, None):
             try:
                 return self.client.interactions.create(**kwargs)
