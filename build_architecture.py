@@ -53,6 +53,7 @@ from changesets import (
     SYSTEM_INSTRUCTION,
     ChangesetAgent,
     ChangesetError,
+    ModelUnavailable,
     contract_for_ticket,
     deliverable_kind,
     specified_but_unowned,
@@ -148,6 +149,12 @@ def failure_fingerprint(transcript: str) -> frozenset[str]:
         # src/x.ts(12,5): error TS2554  ->  src/x.ts: error TS2554
         out.add(re.sub(r"\(\d+,\d+\)", "", line).strip()[:200])
     return frozenset(out)
+
+
+def committed_tickets(repo: TargetRepo) -> set[str]:
+    """Ticket ids with a `feat(<id>):` commit — written only after the
+    ticket's gate passed, so a crashed run can resume past them."""
+    return set(re.findall(r"^[0-9a-f]+ feat\(([^)]+)\):", repo.log(limit=500), re.MULTILINE))
 
 
 def protected_paths(repo: TargetRepo, owners: dict[str, str], tid: str) -> dict[str, str]:
@@ -416,7 +423,11 @@ def main() -> int:
                     help="how many times to repair-and-retry the integration gate")
     ap.add_argument("--code-anyway", action="store_true",
                     help="build even when no ticket names a file (a document architecture)")
+    ap.add_argument("--resume", action="store_true",
+                    help="skip tickets already committed in the target repo (after a crash)")
     args = ap.parse_args()
+    if args.resume and args.fresh:
+        ap.error("--resume keeps the existing repo; --fresh deletes it. Pick one.")
 
     arch = json.loads(args.architecture.read_text(encoding="utf-8"))
     tickets = {t["id"]: t for t in arch["tickets"]}
@@ -592,6 +603,13 @@ def main() -> int:
 
     repo.branch(f"factory/{name}")
 
+    # A ticket counts as built when its own commit is in the repo — the
+    # commit only happens after its gate passed, so it is the evidence.
+    already_built = committed_tickets(repo) if args.resume else set()
+    if already_built:
+        print(f"resume   : {len(already_built)} ticket(s) already committed: "
+              f"{', '.join(sorted(already_built))}")
+
     # ---- Build in dependency order -----------------------------------
     passed, failed = [], []
     db_types_done = False
@@ -605,10 +623,20 @@ def main() -> int:
             if not contract:
                 continue
             ticket = tickets[tid]
+            if tid in already_built:
+                print(f"\n[{tid}] already committed — skipped (--resume)")
+                passed.append(tid)
+                continue
             print(f"\n[{tid}] {ticket['title']}")
             print(f"    files    : {', '.join(contract.required_paths)}")
-            ok, detail = build_ticket(repo, ticket, contract, owners, args.verbose,
-                                      log=log, layer=i, ledger=ledger)
+            try:
+                ok, detail = build_ticket(repo, ticket, contract, owners, args.verbose,
+                                          log=log, layer=i, ledger=ledger)
+            except ModelUnavailable as exc:
+                # The API failed, not the code: fail this ticket, keep the run.
+                repo.revert_uncommitted()
+                ok, detail = False, f"model API unavailable after retries (infrastructure): {exc}"
+                log.ticket_end(tid, False, 0, 0.0, detail[:300])
             ledger.settle(tid, ok)
             (passed if ok else failed).append(tid)
             print(f"    result   : {'PASSED' if ok else 'FAILED'} — {detail}")
@@ -671,9 +699,14 @@ def main() -> int:
         for tid in blamed:
             if tid not in contracts:
                 continue
-            ok, detail, stats = repair_ticket(repo, tickets[tid], contracts[tid],
-                                              integration.transcript, log=log, ledger=ledger,
-                                              owners=owners)
+            try:
+                ok, detail, stats = repair_ticket(repo, tickets[tid], contracts[tid],
+                                                  integration.transcript, log=log, ledger=ledger,
+                                                  owners=owners)
+            except ModelUnavailable as exc:
+                repo.revert_uncommitted()
+                ok, detail = False, f"model API unavailable (infrastructure): {exc}"
+                stats = {"duration": 0.0, "model_seconds": 0.0, "gate_seconds": 0.0, "attempts": 0}
             print(f"    repair {tid}: {'OK' if ok else 'FAILED'} — {detail} "
                   f"({stats['duration']:.0f}s: model {stats['model_seconds']:.0f}s, "
                   f"gate {stats['gate_seconds']:.0f}s, {stats['attempts']} attempt(s))")
