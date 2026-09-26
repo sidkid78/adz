@@ -959,11 +959,15 @@ class TargetRepo:
         tables = types.count("Relationships: [")
         return GateResult(True, f"{self.DB_TYPES_PATH}: {tables} table(s)")
 
-    def supabase_stop(self) -> None:
+    def supabase_stop(self, keep_data: bool = True) -> None:
         """Stop only THIS project's stack, by id. Never a bare
         `supabase stop`, which would take down every project running on
-        the machine."""
-        _run_infra(["supabase", "stop", "--project-id", self.name], self.path, timeout=300)
+        the machine. keep_data=False also drops its volumes — only ever
+        this project's, and only its disposable local test database."""
+        cmd = ["supabase", "stop", "--project-id", self.name]
+        if not keep_data:
+            cmd.append("--no-backup")
+        _run_infra(cmd, self.path, timeout=300)
 
     # ---- the gate ----------------------------------------------------
     def run_gate(self, commands: list[list[str]], timeout: int = 600,
@@ -1372,6 +1376,28 @@ def run_integration(repo: "TargetRepo", steps: list[Step] | None = None,
             transcript.append(f"-- infra failure, retry {attempt + 1}/{step.retries} --")
             time.sleep(5)
             result = repo.run_gate([step.resolve(repo)], timeout=step.timeout)
+        # `supabase db reset` can fail on Supabase's OWN stack: Realtime
+        # re-runs its migrations while the database is recreated and dies
+        # on a duplicate schema_migrations row ("error running container:
+        # exit 1"), every time, on a correct schema. The question the step
+        # asks — do all migrations apply to an empty database — is answered
+        # just as well by dropping this project's volumes and starting
+        # fresh. A migration that fails THAT way is still the code's fault.
+        if (not result.passed and step.name == "supabase db reset"
+                and "error running container" in result.transcript
+                and not failed_migration(result.transcript)):
+            transcript.append("-- db reset hit a Supabase stack error; "
+                              "verifying with a clean stop + start instead --")
+            repo.supabase_stop(keep_data=False)
+            started = repo.supabase_start()
+            bad = failed_migration(started.transcript) if not started.passed else None
+            if started.passed:
+                result = GateResult(True, "clean start applied every migration to an empty "
+                                          "database (db reset itself failed inside Supabase)")
+            else:
+                result = GateResult(False, started.transcript
+                                    + (f"\nMIGRATION FAILED: {bad}" if bad else ""),
+                                    step.name)
         # Exit code 0 is necessary, not sufficient.
         if result.passed and step.assert_output:
             complaint = step.assert_output(result.transcript)
