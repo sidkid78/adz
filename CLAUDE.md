@@ -343,9 +343,9 @@ and the showcase use package-qualified imports (`from hooks.hook_bus import ...`
 therefore be launched from inside `hooks/`. `blueprints/blueprints.py` uses `try/except ImportError`
 fallbacks to work both ways. Match the file you are editing rather than normalizing across files.
 
-**Dependencies.** `e2b`, `ruff`, `mypy`, and `pytest` are installed in `.venv` but are **not**
-declared in `pyproject.toml`. If you touch dependency handling, add them rather than assuming the
-manifest is complete.
+**Dependencies.** `e2b` is a runtime dependency; `ruff`, `mypy` and `pytest` are in the `dev`
+dependency group. They used to be installed in `.venv` without being declared, so the first
+`uv sync` after a lockfile change silently uninstalled all four. Declare anything the repo runs.
 
 **`notes/` is early plans, not a spec.** The blueprints and `notes/code-examples/` were never
 verified and several contradict rules the code now enforces. Read them for intent only; don't
