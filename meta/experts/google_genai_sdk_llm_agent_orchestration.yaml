@@ -1,0 +1,8 @@
+role: google_genai_sdk_llm_agent_orchestration
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Implement modular Gemini SDK integrations separating clients, personas, tools, and
+  core agent logic for clean maintainability.
+last_updated: '2026-09-26T07:12:50.239589+00:00'

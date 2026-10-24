@@ -20,10 +20,12 @@ more care than one that copies a file, so:
       size has stopped changing AND import_architecture parses it with
       every planned subtask present — the same completeness guard that
       caught the truncated nfo.json export.
-  BUILDABILITY  An architecture whose tickets yield no file contracts is
-      not code work (orch2 also plans business rollouts). Those are
-      reported and skipped rather than fed to a builder that would
-      produce nothing.
+  ROUTING  orch2 plans consulting work as well as software. When no
+      ticket names a file (changesets.deliverable_kind), the deliverable
+      is prose, and it goes to run_factory.py — the document factory —
+      instead of being built as a Next.js app from guessed paths. An
+      architecture that is code but yields no file contracts at all is
+      reported and skipped.
   A LEDGER  Every decision is appended to factory_runs/watcher.jsonl, so
       "why did it skip that one" is answerable after the fact.
   A CEILING  --max-tickets refuses plans larger than expected rather than
@@ -40,6 +42,7 @@ Usage:
 
 import argparse
 import json
+import os
 import subprocess
 import sys
 import threading
@@ -54,7 +57,13 @@ if str(REPO_ROOT) not in sys.path:
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from changesets import ChangesetError, contract_for_ticket
+from changesets import (
+    ChangesetError,
+    contract_for_ticket,
+    deliverable_kind,
+    serves_root,
+    written_but_undeclared,
+)
 from import_architecture import IncompleteExport, build_order, load_architecture
 
 DEFAULT_WATCH_DIR = Path(
@@ -62,6 +71,9 @@ DEFAULT_WATCH_DIR = Path(
 )
 SPECS_DIR = REPO_ROOT / "specs"
 LEDGER = REPO_ROOT / "factory_runs" / "watcher.jsonl"
+# Builds write to a log file, where Windows would default to cp1252 and
+# crash on the first "▲" in next build's output.
+_UTF8_ENV = {**os.environ, "PYTHONIOENCODING": "utf-8"}
 
 # How long a file's size must hold steady before it is considered written.
 STABLE_SECONDS = 4.0
@@ -138,9 +150,9 @@ def wait_until_ready(path: Path, timeout: float = READY_TIMEOUT) -> dict | None:
     return None
 
 
-def contract_summary(arch: dict) -> tuple[int, int, list[str]]:
-    """(tickets with contracts, total files, ids without one) — the test
-    for whether this architecture is code work at all."""
+def contract_summary(arch: dict) -> tuple[int, int, list[str], set[str]]:
+    """(tickets with contracts, total files, ids without one, owned paths)
+    — the test for whether this architecture is code work at all."""
     by_id = {t["id"]: t for t in arch["tickets"]}
     owned: set[str] = set()
     contracted, files, missing = 0, 0, []
@@ -154,7 +166,7 @@ def contract_summary(arch: dict) -> tuple[int, int, list[str]]:
             owned |= set(c.required_paths)
             contracted += 1
             files += len(c.required_paths)
-    return contracted, files, missing
+    return contracted, files, missing, owned
 
 
 class ArchitectureHandler(FileSystemEventHandler):
@@ -201,19 +213,44 @@ class ArchitectureHandler(FileSystemEventHandler):
                    detail="raise --max-tickets to allow it")
             return
 
-        contracted, files, missing = contract_summary(arch)
+        name = slug_for(arch, path)
+
+        # Route before importing. A document architecture fed to the
+        # software factory still "plans" — fallback paths give every
+        # ticket a file — so skipping on zero contracts never caught it.
+        kind, why = deliverable_kind(tickets)
+        if kind == "document":
+            record("routed_document", file=path.name, name=name, tickets=len(tickets),
+                   detail=why)
+            if self.args.plan_only:
+                record("plan_only", name=name, detail="skipping document build (--plan-only)")
+                return
+            with self.lock:
+                self.build_documents(path, name)
+            return
+
+        contracted, files, missing, owned = contract_summary(arch)
         if contracted == 0:
             record("skipped_not_code", file=path.name, tickets=len(tickets),
                    detail="no ticket yields a file contract; this is not a code architecture")
             return
 
-        name = slug_for(arch, path)
         spec = SPECS_DIR / f"{name}.architecture.json"
         SPECS_DIR.mkdir(parents=True, exist_ok=True)
         spec.write_text(json.dumps(arch, indent=2), encoding="utf-8", newline="\n")
         record("imported", file=path.name, spec=spec.name, name=name,
                tickets=len(tickets), contracted=contracted, files=files,
                no_contract=len(missing))
+
+        # Warned, not refused: everything else still builds and is worth
+        # having, but the run is known to fail its runtime proof, and the
+        # fix belongs in the orch2 prompt rather than in this factory.
+        undeclared = written_but_undeclared(tickets, owned)
+        if undeclared or not serves_root(owned):
+            record("plan_gap", name=name, no_home_page=not serves_root(owned),
+                   undeclared=[p for p, _ in undeclared][:20],
+                   detail="runtime proof will fail on /" if not serves_root(owned)
+                   else f"{len(undeclared)} file(s) written in code but in no file list")
 
         if self.args.plan_only:
             record("plan_only", name=name, detail="skipping build (--plan-only)")
@@ -227,16 +264,36 @@ class ArchitectureHandler(FileSystemEventHandler):
     def build(self, spec: Path, name: str) -> None:
         log_path = REPO_ROOT / "factory_runs" / f"watch_{name}.log"
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        cmd = [sys.executable, str(REPO_ROOT / "build_architecture.py"),
+        # -u: unbuffered. Redirected to a file, Python buffers stdout, and a
+        # build two minutes in showed a 0-byte log — indistinguishable from
+        # a hung one, which is exactly when someone opens it.
+        cmd = [sys.executable, "-u", str(REPO_ROOT / "build_architecture.py"),
                str(spec), "--build", "--fresh", "--repo-name", name]
         record("build_start", name=name, log=log_path.name)
         started = time.time()
         with log_path.open("w", encoding="utf-8", newline="\n") as fh:
-            proc = subprocess.run(cmd, cwd=REPO_ROOT, stdout=fh,
+            proc = subprocess.run(cmd, cwd=REPO_ROOT, stdout=fh, env=_UTF8_ENV,
                                   stderr=subprocess.STDOUT, check=False)
         record("build_end", name=name, exit=proc.returncode,
                seconds=int(time.time() - started),
                detail=f"repo: factory_workspace/{name}")
+
+    def build_documents(self, execution: Path, name: str) -> None:
+        """The document factory reads the orch2 execution directly — its
+        intake parses the orchestrator report format, not the imported
+        architecture — authors a contract per ticket, then builds and
+        gates each document. Passing ones land in drops/outbox/factory/."""
+        log_path = REPO_ROOT / "factory_runs" / f"watch_{name}.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        cmd = [sys.executable, "-u", str(REPO_ROOT / "run_factory.py"), str(execution), "--build"]
+        record("document_build_start", name=name, log=log_path.name)
+        started = time.time()
+        with log_path.open("w", encoding="utf-8", newline="\n") as fh:
+            proc = subprocess.run(cmd, cwd=REPO_ROOT, stdout=fh, env=_UTF8_ENV,
+                                  stderr=subprocess.STDOUT, check=False)
+        record("document_build_end", name=name, exit=proc.returncode,
+               seconds=int(time.time() - started),
+               detail="documents: drops/outbox/factory/; escalations: factory_runs/<run>/escalated/")
 
 
 def main() -> int:

@@ -1,0 +1,10 @@
+role: sales_pipeline_automation_field_service_revops
+total_runs: 2
+successes: 1
+failures: 1
+notes:
+- Ensure critical validation gates have realistic retry budgets and robust fallback
+  mechanisms to prevent premature task failure.
+- Verify Twilio A2P 10DLC brand and campaign registration are fully approved before
+  activating any automated quote follow-up workflows.
+last_updated: '2026-09-24T19:50:53.120600+00:00'

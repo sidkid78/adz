@@ -322,7 +322,8 @@ function renderFeed(st) {
     else if (e.kind === 'ticket_end') txt = `${e.ok?'✔':'✕'} ${e.ticket} — ${e.detail||''}`;
     else if (e.kind === 'gate') txt = `  gate ${e.passed?'pass':'FAIL'} · ${e.command}`;
     else if (e.kind === 'integration_step') txt = `⊞ ${e.name}: ${e.status}`;
-    else if (e.kind === 'repair') txt = `⟳ repair ${e.ticket} round ${e.round}: ${e.ok?'ok':'failed'}`;
+    else if (e.kind === 'repair') txt = `⟳ repair ${e.ticket} round ${e.round}: ${e.ok?'ok':'failed'}`
+      + (e.duration != null ? ` · ${Math.round(e.duration)}s (model ${Math.round(e.model_seconds)}s, gate ${Math.round(e.gate_seconds)}s)` : '');
     else if (e.kind === 'run_end') txt = `■ run finished — integration ${e.integration_passed?'PASS':'FAIL'}`;
     else if (e.kind === 'run_start') txt = `▶ ${e.ticket_count} tickets`;
     else if (e.kind === 'log') txt = e.message;

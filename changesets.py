@@ -35,6 +35,7 @@ as an unrelated compiler error three tickets later.
 
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -106,9 +107,11 @@ def normalize_path(path: str) -> str:
 # Many documents put the path in a header comment on the first line of
 # the code itself (`// src/types/dashboard.ts`) rather than in the prose
 # above it. That is the strongest ownership signal available: the file
-# is naming itself.
+# is naming itself. orch2 workers often label it (`// file: app/x/page.tsx`);
+# without the optional label that header was missed and the path fell back
+# to whatever the prose above mentioned last.
 _SELF_NAMING_RE = re.compile(
-    r"\A\s*(?://|--|/\*|#)\s*((?:" + _PATH_ROOTS + r")/[A-Za-z0-9_\-./\[\]]+\.(?:tsx|ts|sql))"
+    r"\A\s*(?://|--|/\*|#)\s*(?:file:\s*)?((?:" + _PATH_ROOTS + r")/[A-Za-z0-9_\-./\[\]]+\.(?:tsx|ts|sql))"
 )
 _FENCE_RE = re.compile(r"^```[a-zA-Z0-9_+-]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
 
@@ -296,6 +299,91 @@ def specified_but_unowned(tickets: list[dict], owned: set[str]) -> list[str]:
     return [p for p in drawn if p not in owned]
 
 
+# src/app/page.tsx, or one nested only in route groups — `(marketing)` is
+# not part of the URL, so app/(marketing)/page.tsx is the site root too.
+_ROOT_PAGE_RE = re.compile(r"src/app/(?:\([^/]+\)/)*page\.tsx?$")
+
+
+def serves_root(owned: set[str]) -> bool:
+    """Whether any ticket builds the page that answers `/`.
+
+    runtime_proof.py requests `/` first. An architecture with no root page
+    builds clean through every static gate and then fails there — a
+    next-google-genai run spent 982k tokens to learn that, when the plan
+    already said so."""
+    return any(_ROOT_PAGE_RE.match(p) for p in owned)
+
+
+def self_named_paths(architecture: str) -> list[str]:
+    """Files a document writes out in full, by their own header comment.
+
+    Stricter than extract_owned_paths: only a fence that names itself,
+    never a path borrowed from the prose around it."""
+    found: list[str] = []
+    for body in _FENCE_RE.findall(architecture):
+        if len(body.strip()) < MIN_FENCE_CHARS:
+            continue
+        m = _SELF_NAMING_RE.match(body)
+        if m:
+            path = normalize_path(m.group(1))
+            if path.startswith(ALLOWED_ROOTS) and path not in found:
+                found.append(path)
+    return found
+
+
+def written_but_undeclared(tickets: list[dict], owned: set[str]) -> list[tuple[str, str]]:
+    """(path, ticket id) for code a ticket writes out that no ticket will build.
+
+    A ticket's `files` list is its plan; its fences are a worker's draft,
+    and the two drift. One architecture listed `retrieval-engine.ts` while
+    its own code wrote `retriever.ts`, and wrote the claim-submission page
+    in full while no `files` list named it — so the app shipped with no way
+    to submit a claim. Reported, not adopted: building the fences as well
+    would put two versions of the same module side by side."""
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for ticket in tickets:
+        for path in self_named_paths(ticket.get("architecture", "")):
+            if path not in owned and path not in seen:
+                seen.add(path)
+                out.append((path, ticket["id"]))
+    return out
+
+
+def named_paths(ticket: dict) -> list[str]:
+    """The files a ticket itself names — declared, or else scraped from
+    its prose — before ownership or extension filtering. Empty means any
+    path the ticket ends up with was guessed by fallback_path()."""
+    declared = [normalize_path(p.strip().replace("\\", "/"))
+                for p in (ticket.get("files") or []) if isinstance(p, str) and p.strip()]
+    return declared or extract_owned_paths(ticket.get("architecture", ""))
+
+
+def deliverable_kind(tickets: list[dict]) -> tuple[str, str]:
+    """"code" or "document", and why. Deterministic; no model involved.
+
+    orch2 plans both software and consulting work, and the software
+    factory cannot tell them apart by itself: fallback_path() hands every
+    ticket SOME path, so a runbook ticket becomes
+    src/app/<ticket>/page.tsx and the plan looks perfectly buildable.
+    That is how a GoHighLevel/Twilio consulting engagement produced a
+    clean-looking five-ticket Next.js plan.
+
+    The signal that separated it was absolute: across every code
+    architecture built so far, most tickets name their files and at most
+    three in nine lean on the fallback. In the consulting one, NONE did.
+    So the rule is the conservative one — document only when no ticket
+    names a single file. A mixed plan stays code; the fallback exists
+    for the odd ticket that states no path, not for a whole plan.
+    """
+    named = [t["id"] for t in tickets
+             if any(p.startswith(ALLOWED_ROOTS) for p in named_paths(t))]
+    if not named:
+        return "document", (f"none of the {len(tickets)} ticket(s) names a file under "
+                            f"{', '.join(ALLOWED_ROOTS)} — every path would be a guess")
+    return "code", f"{len(named)}/{len(tickets)} ticket(s) name their own files"
+
+
 def contract_for_ticket(ticket: dict, gate: list[list[str]],
                         already_owned: set[str]) -> ChangesetContract:
     """Derive a changeset contract, deterministically. Raises
@@ -310,9 +398,7 @@ def contract_for_ticket(ticket: dict, gate: list[list[str]],
     Scraping stays as the fallback, because every architecture written
     before the schema gained that field still has to build.
     """
-    declared = [normalize_path(p.strip().replace("\\", "/"))
-                for p in (ticket.get("files") or []) if isinstance(p, str) and p.strip()]
-    candidates = declared or extract_owned_paths(ticket["architecture"])
+    candidates = named_paths(ticket)
 
     kept, rejected = [], []
     for path in candidates:
@@ -367,11 +453,82 @@ def validate_changeset(contract: ChangesetContract, repo, written: list[str]) ->
     if broken:
         return False, broken
 
-    silenced = casts_to_never(repo, written)
-    if silenced:
-        return False, silenced
+    refused = pregate_violation(repo, written)
+    if refused:
+        return False, refused
 
     return True, f"{len(contract.required_paths)} required file(s) present"
+
+
+def pregate_violation(repo, written: list[str]) -> str | None:
+    """Code that compiles but defeats the checks. Shared by first builds and
+    integration repairs: repairs used to skip it, and one shipped a page
+    that cast a component to ComponentType<{}> to render it without its
+    required data."""
+    for check in (casts_to_never, erased_props, server_action_values):
+        problem = check(repo, written)
+        if problem:
+            return problem
+    return None
+
+
+_ERASED_PROPS = re.compile(
+    r"\bas\s+(?:unknown\s+as\s+)?(?:React\.)?(?:ComponentType|FC|FunctionComponent|ComponentClass)"
+    r"\s*<\s*(?:\{\s*\}|any|unknown|never)\s*>")
+
+
+def erased_props(repo, written: list[str]) -> str | None:
+    """A component cast to one that takes no props — the compiler silenced.
+
+    `mod as ComponentType<{}>` let a repair render <DagVisualizer /> with no
+    `nodes`; tsc agreed, and the page crashed at prerender on nodes.filter.
+    Same family as casting to `never`: the cast exists to stop the type
+    system describing the component."""
+    for path in written:
+        if not path.endswith((".ts", ".tsx")):
+            continue
+        for n, line in enumerate((repo.read_file(path) or "").splitlines(), 1):
+            m = _ERASED_PROPS.search(line)
+            if m:
+                return (f"{path}:{n} casts a component to one without props: {m.group(0)}\n"
+                        f"That hides the props the component requires, so it renders without its "
+                        f"data and fails at runtime. Pass the props it declares instead.")
+    return None
+
+
+_USE_SERVER = re.compile(r"\A(?:\s*(?://[^\n]*|/\*.*?\*/))*\s*['\"]use server['\"]", re.DOTALL)
+# What a "use server" module may export: async functions (declared or as an
+# async arrow), and types, which are erased before Next ever looks.
+_ALLOWED_SERVER_EXPORT = re.compile(
+    r"^export\s+(?:default\s+)?(?:async\s+function\b|type\b|interface\b|\{|\*)"
+    r"|^export\s+(?:const|let)\s+\w+\s*(?::[^=]+)?=\s*async\b")
+
+
+def server_action_values(repo, written: list[str]) -> str | None:
+    """A "use server" file that exports anything but async functions.
+
+    Next turns every export of such a file into a server action, so it
+    refuses a constant or schema at BUILD time — "A 'use server' file can
+    only export async functions, found object" — while `tsc` and vitest
+    pass it without comment. It first surfaced at the integration gate,
+    reported against a route rather than a file, where nothing could blame
+    it. Caught here it costs one attempt, with the file and line named."""
+    for path in written:
+        if not path.endswith((".ts", ".tsx")):
+            continue
+        text = repo.read_file(path) or ""
+        if not _USE_SERVER.match(text):
+            continue
+        bad = [(n, line.strip()) for n, line in enumerate(text.splitlines(), 1)
+               if line.startswith("export") and not _ALLOWED_SERVER_EXPORT.match(line)]
+        if bad:
+            n, line = bad[0]
+            return (f'{path}:{n} exports a non-function from a "use server" file: {line[:90]}\n'
+                    f"Next makes every export of a \"use server\" module a server action and "
+                    f"refuses anything but async functions at build time — tsc does not "
+                    f"notice. Move constants, schemas and types into a separate module "
+                    f"and import them from there ({len(bad)} such export(s) in this file).")
+    return None
 
 
 _NEVER_CAST = re.compile(r"as\s+(?:unknown\s+as\s+)?never\b")
@@ -532,6 +689,38 @@ def parse_files(text: str) -> dict[str, str]:
 DB_TYPES_PATH = "src/lib/database.types.ts"
 
 
+API_RETRY_DELAYS = (5, 20, 60)   # seconds between attempts on a transient failure
+API_TIMEOUT_S = 600              # one call; a pro-tier repair with high thinking takes minutes, not hours
+
+# Named by class so no SDK-internal module has to be imported to check them.
+_TRANSIENT_ERROR_NAMES = {
+    "APIConnectionError", "APITimeoutError", "RateLimitError", "InternalServerError",
+    "ServerError", "NoResponseError",
+    # transport-level causes the SDK wraps
+    "ReadError", "WriteError", "ConnectError", "RemoteProtocolError",
+    "ReadTimeout", "WriteTimeout", "ConnectTimeout", "PoolTimeout",
+}
+
+
+class ModelUnavailable(Exception):
+    """The model API failed and kept failing: an infrastructure problem,
+    not evidence about the code. Callers fail the ticket as infra and keep
+    the run going, and no expert learns a lesson from it."""
+
+
+def is_transient_api_error(exc: BaseException) -> bool:
+    """True when the failure says nothing about the request itself."""
+    seen: BaseException | None = exc
+    while seen is not None:
+        if type(seen).__name__ in _TRANSIENT_ERROR_NAMES:
+            return True
+        code = getattr(seen, "status_code", None) or getattr(seen, "code", None)
+        if isinstance(code, int) and (code == 429 or 500 <= code < 600):
+            return True
+        seen = seen.__cause__ or seen.__context__
+    return False
+
+
 class ChangesetAgent:
     """One build session for one ticket. Session continuity matters: the
     repair turn must remember the files it just wrote, so a compiler
@@ -540,14 +729,36 @@ class ChangesetAgent:
     def __init__(self, model: str, system_instruction: str | None = None):
         self.client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
         self.model = model
-        interaction = self.client.interactions.create(
-            model=model, input=system_instruction or SYSTEM_INSTRUCTION,
-        )
+        interaction = self._create(model=model, input=system_instruction or SYSTEM_INSTRUCTION)
         self._last = interaction.id
         self.last_usage = None
 
+    def _create(self, **kwargs):
+        """interactions.create, retried through transient API failures.
+
+        A single `WinError 10054` — the server resetting the connection —
+        once killed a six-ticket build ten minutes in, two tickets done,
+        with nothing wrong in any code. The SDK's own retries did not cover
+        a mid-response reset. Only failures that say nothing about the
+        request are retried; a 400 or an auth error surfaces at once."""
+        # Without a timeout a connection that goes silent — no reset, no
+        # error — waits forever: a build sat 90 minutes inside one repair's
+        # SSL read. A timeout turns that into an error the retries handle.
+        kwargs.setdefault("timeout", API_TIMEOUT_S)
+        for delay in (*API_RETRY_DELAYS, None):
+            try:
+                return self.client.interactions.create(**kwargs)
+            except Exception as exc:  # classified below; anything not transient is re-raised
+                if not is_transient_api_error(exc):
+                    raise
+                if delay is None:
+                    raise ModelUnavailable(f"{type(exc).__name__}: {exc}") from exc
+                print(f"    (model API {type(exc).__name__}; retrying in {delay}s)")
+                time.sleep(delay)
+        raise AssertionError("unreachable")
+
     def _call(self, text: str) -> dict[str, str]:
-        interaction = self.client.interactions.create(
+        interaction = self._create(
             model=self.model, input=text, previous_interaction_id=self._last,
         )
         self._last = interaction.id

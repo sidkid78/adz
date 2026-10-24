@@ -1,0 +1,8 @@
+role: fraud_detection_risk_engineering
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Maintain modularity in hybrid scoring systems by cleanly separating deterministic
+  rules from probabilistic LLM reasoning.
+last_updated: '2026-10-23T20:52:33.993023+00:00'

@@ -1,0 +1,44 @@
+{
+  "slug": "tech_arch_data_model",
+  "kind": "markdown_document",
+  "artifact_name": "technical_architecture_and_data_schema",
+  "checks": [
+    {
+      "type": "required_sections",
+      "sections": [
+        "1. Technical Systems Architecture",
+        "2. Webhook & API Ingress Points",
+        "3. Data Schema Definitions",
+        "4. State-Machine Transition Tables (Sales Pipeline)"
+      ]
+    },
+    {
+      "type": "min_table_rows",
+      "count": 8
+    },
+    {
+      "type": "fenced_blocks_parse"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "53,000",
+      "description": "Must reference the $53,000 revenue leakage metric"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "Missed Call Text-Back",
+      "description": "Must document the Missed Call Text-Back trigger and logic"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "hvac_job_type",
+      "description": "Opportunity schema must include the hvac_job_type custom field"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "SaneBox",
+      "description": "Must reference SaneBox for email triage"
+    }
+  ],
+  "test_code": null
+}

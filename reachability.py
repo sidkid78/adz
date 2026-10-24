@@ -30,6 +30,11 @@ a regex over import specifiers, not a type-aware resolver. It needs to
 answer one coarse question and stay dependency-free; the cost is that an
 exotic import form could be missed, which fails safe (a file is called
 reachable when in doubt, never unreachable).
+
+An import has to plausibly DO something to count — a referenced
+binding, or a bare/discarded-dynamic import of a module with
+module-scope effects. `import * as X; void X` is found, not used, and
+does not count. See live_specifiers().
 """
 
 import json
@@ -91,6 +96,150 @@ _IMPORT_RE = re.compile(r"""(?:from|import|require)\s*\(?\s*["']([^"']+)["']""")
 
 def parse_specifiers(text: str) -> list[str]:
     return _IMPORT_RE.findall(text)
+
+
+# ---- Imports that exist only to be found --------------------------------
+# The test-file cheat moved into a page. Told that four modules were
+# unreachable, a repair added this to src/app/(dashboard)/page.tsx:
+#
+#     import * as _guardrails from "../../lib/agents/guardrails";
+#     void _guardrails;
+#
+# The page never called a guardrail. Reachability went green, and it cost
+# 286k tokens — more than the whole first build — to make four modules
+# LOOK consumed. Meanwhile the trend API route still never called the
+# trend agent: the real wiring gap was covered, not closed.
+#
+# So an import confers reachability only when it plausibly does work:
+#   - a binding import counts if some binding is referenced other than as
+#     `void X` — a call, a JSX tag, a type position, a re-export;
+#   - a bare `import "./x"` counts only if x does something at module
+#     scope (the self-registering tool pattern this module exists for);
+#     importing a module of plain declarations for its side effects runs
+#     nothing.
+# Both tests are generous: any mention counts as a use, any top-level call
+# counts as an effect. When unsure, the edge counts — this check must
+# never strand real code, only refuse imports that visibly do nothing.
+
+# `import [type] <clause> from "spec"`. Quotes are excluded from the
+# clause so a bare import on the line above can't be swallowed into it.
+_BINDING_IMPORT_RE = re.compile(
+    r"""^[ \t]*import\s+(?:type\s+)?(?P<clause>[^;"']*?)\s+from\s+["'](?P<spec>[^"']+)["'][ \t]*;?""",
+    re.MULTILINE | re.DOTALL)
+_BARE_IMPORT_RE = re.compile(r"""^[ \t]*import\s+["'](?P<spec>[^"']+)["'][ \t]*;?""", re.MULTILINE)
+# `await import("./x");` as a statement of its own — the result thrown
+# away. The advice text recommends dynamic import() for self-registering
+# modules, and a repair applied it to modules that register nothing, in
+# instrumentation.ts. Same test as a bare import: only effects count.
+_DISCARDED_DYNAMIC_RE = re.compile(
+    r"""^[ \t]*(?:await\s+|void\s+)?import\(\s*["'](?P<spec>[^"']+)["']\s*\)[ \t]*;?[ \t]*$""",
+    re.MULTILINE)
+_IDENT = r"[A-Za-z_$][\w$]*"
+
+# Top-level lines that declare rather than do. Anything else at column 0
+# (`mcp.addTool(`, `register(`, `await init()`) is an effect.
+_DECLARATION_START = re.compile(
+    r"^(?:export\s+(?:default\s+)?)?(?:declare\s+)?(?:async\s+)?"
+    r"(?:function|class|abstract|interface|type|enum|const|let|var|namespace)\b"
+    r"|^(?:import|export\s*[{*]|//|/\*|\*|[}\])]|$)")
+
+
+def _bindings(clause: str) -> list[str]:
+    """Local names an import clause introduces: `X`, `* as X`,
+    `{ a, b as c, type d }`, or a default plus either of the others."""
+    names: list[str] = []
+    braces = re.search(r"\{([^}]*)\}", clause)
+    if braces:
+        for item in braces.group(1).split(","):
+            item = re.sub(r"^\s*type\s+", "", item).strip()
+            if item:
+                names.append(item.split(" as ")[-1].strip())
+        clause = clause[:braces.start()] + clause[braces.end():]
+    for part in clause.split(","):
+        part = part.strip()
+        if part.startswith("*"):
+            names.append(part.split(" as ")[-1].strip())
+        elif part:
+            names.append(part)
+    return [n for n in names if re.fullmatch(_IDENT, n)]
+
+
+def _namespace_member_used(name: str, body: str) -> bool:
+    """For `import * as X`: is anything IN the module read — `X.fn()`,
+    `<X.Card/>`, `X["k"]`? A namespace that is only mentioned as a whole
+    reads nothing from the module.
+
+    That is the shape of every repair cheat that outlived the `void X`
+    rule: six namespaces pushed into an array and rendered as
+    `{dependencies.length}` in a hidden div, commented "so the imports are
+    not elided ... they become reachable". Mentioning a namespace is free;
+    using a module means reaching into it."""
+    return re.search(rf"(?<![\w$]){re.escape(name)}\s*(?:\?\.|\.|\[)", body) is not None
+
+
+def _is_used(name: str, body: str) -> bool:
+    """Referenced anywhere except as the operand of `void`."""
+    mention = re.compile(rf"(?<![\w$]){re.escape(name)}(?![\w$])")
+    return any(not re.search(r"\bvoid\s*\(?\s*$", body[:m.start()][-12:])
+               for m in mention.finditer(body))
+
+
+def has_module_effects(text: str) -> bool:
+    """Does loading this module DO anything? Syntactic and generous: a
+    top-level statement that is not a declaration counts, and so does a
+    top-level declaration whose initialiser calls something
+    (`export const tool = server.tool(...)`).
+
+    Template strings and block comments are blanked first: a system
+    prompt in a backtick string has lines at column 0, and
+    "CRITICAL INTEGRITY CONSTRAINTS:" once read as a module-scope
+    statement."""
+    text = re.sub(r"/\*.*?\*/", "", text, flags=re.DOTALL)
+    text = re.sub(r"`(?:\\.|[^`\\])*`", "``", text, flags=re.DOTALL)
+    for line in text.splitlines():
+        if not line or line[0] in " \t":
+            continue
+        if not _DECLARATION_START.match(line):
+            return True
+        if re.match(r"^(?:export\s+)?(?:const|let|var)\b[^=]*=.*\(", line):
+            return True
+        if re.match(r"^export\s+default\s+(?!function|class|async)", line) and "(" in line:
+            return True
+    return False
+
+
+def live_specifiers(text: str, importer: Path, repo: Path) -> list[str]:
+    """Specifiers whose import plausibly does work (see above). Everything
+    parse_specifiers finds, minus binding imports nothing uses and bare
+    imports of modules with no module-scope effects."""
+    dead: set[tuple[int, int]] = set()
+    body = _BINDING_IMPORT_RE.sub(lambda m: " " * len(m.group(0)), text)
+    for m in _BINDING_IMPORT_RE.finditer(text):
+        clause = m.group("clause")
+        names = _bindings(clause)
+        namespace = re.search(r"\*\s*as\s+(" + _IDENT + ")", clause)
+        if namespace and not _namespace_member_used(namespace.group(1), body):
+            names = [n for n in names if n != namespace.group(1)]
+            if not names:
+                dead.add(m.span())
+                continue
+        if names and not any(_is_used(n, body) for n in names):
+            dead.add(m.span())
+    for m in [*_BARE_IMPORT_RE.finditer(text), *_DISCARDED_DYNAMIC_RE.finditer(text)]:
+        target = resolve(m.group("spec"), importer, repo)
+        if target is None:
+            continue
+        try:
+            effects = has_module_effects(target.read_text(encoding="utf-8", errors="replace"))
+        except OSError:
+            effects = True
+        if not effects:
+            dead.add(m.span())
+    live = []
+    for m in _IMPORT_RE.finditer(text):
+        if not any(start <= m.start() < end for start, end in dead):
+            live.append(m.group(1))
+    return live
 
 
 def resolve(spec: str, importer: Path, repo: Path) -> Path | None:
@@ -177,11 +326,41 @@ def reachable_files(repo: Path, harness: bool = True) -> set[Path]:
             text = current.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for spec in parse_specifiers(text):
+        for spec in live_specifiers(text, current, repo):
             target = resolve(spec, current, repo)
             if target and target not in seen:
                 queue.append(target)
     return seen
+
+
+def untouched_scaffold_files(repo: Path) -> set[str]:
+    """Files still exactly as the scaffold committed them.
+
+    The scaffold ships src/index.ts (a placeholder only its smoke test
+    imports) into every project. In a Next app nothing should import it,
+    so it was an orphan in EVERY build — a failure no ticket could fix
+    honestly, and the one the reachability cheats kept trying to satisfy
+    (`import '../index'` in the root layout, `void _index` in a page).
+
+    The factory answers for what tickets built. A scaffold file nobody
+    has changed is not that; once a ticket modifies one, it is, and it
+    is checked like any other."""
+    import subprocess
+
+    def git(*args: str) -> str:
+        try:
+            proc = subprocess.run(["git", *args], cwd=repo, capture_output=True,
+                                  text=True, encoding="utf-8", timeout=60, check=False)
+        except (OSError, subprocess.SubprocessError):
+            return ""
+        return proc.stdout if proc.returncode == 0 else ""
+
+    roots = git("rev-list", "--max-parents=0", "HEAD").split()
+    if not roots:
+        return set()
+    seeded = set(git("ls-tree", "-r", "--name-only", roots[-1]).splitlines())
+    changed = set(git("diff", "--name-only", roots[-1]).splitlines())
+    return seeded - changed
 
 
 def check_reachability(repo_path: Path, owned: dict[str, str] | None = None
@@ -234,6 +413,8 @@ def check_reachability(repo_path: Path, owned: dict[str, str] | None = None
     if owned is not None:
         # Only hold the factory responsible for files it built.
         orphans = [p for p in orphans if p in owned]
+    scaffold = untouched_scaffold_files(repo)
+    orphans = [p for p in orphans if p not in scaffold]
 
     if not orphans:
         return True, f"{len(reachable)} file(s) reachable from {len(entries)} entry point(s)", []
@@ -260,8 +441,14 @@ def check_reachability(repo_path: Path, owned: dict[str, str] | None = None
         " static import would run them before the object is initialised.\n\n"
         "A test that imports them does NOT count, and neither does a barrel"
         " that re-exports them: only the entry points listed above are"
-        " searched. If a module has no entry point that should own it, the"
-        " missing thing is the entry point — write that."
+        " searched. Neither does an import nothing uses — `import * as X`"
+        " followed by `void X`, or a bare `import \"./x\"` of a module that"
+        " only declares things, and neither does `import * as X` when nothing"
+        " reads `X.something`. An existing page or route has to CALL the"
+        " module.\n\n"
+        "Do NOT create a new page, route or layout to host it: if no"
+        " existing entry point should use the module, that is a gap in the"
+        " architecture, and it is reported to a human rather than repaired."
     )
     lines += ["", advice]
     return False, "\n".join(lines), orphans

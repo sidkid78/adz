@@ -1,0 +1,10 @@
+role: product_growth_synthetic_simulation_viral_mechanics
+total_runs: 2
+successes: 1
+failures: 1
+notes:
+- Fix TypeScript type errors (e.g., 'never' types and missing properties like 'persona_id')
+  to ensure `npm run typecheck` passes successfully.
+- Implement the customer advisory board and GTM engine using modular TypeScript libraries,
+  API routes, and React share pages for seamless integration.
+last_updated: '2026-09-26T13:44:01.450723+00:00'

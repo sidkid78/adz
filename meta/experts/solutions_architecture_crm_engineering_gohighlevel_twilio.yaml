@@ -1,0 +1,8 @@
+role: solutions_architecture_crm_engineering_gohighlevel_twilio
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Maintain exact client sub-account IDs, Twilio SIDs, phone numbers, and API endpoints
+  in your technical architecture specification.
+last_updated: '2026-09-24T03:33:50.157981+00:00'

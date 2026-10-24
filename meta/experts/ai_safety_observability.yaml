@@ -1,0 +1,8 @@
+role: ai_safety_observability
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Implement guardrails and structured telemetry logging in dedicated utility modules
+  to ensure agent safety and traceability.
+last_updated: '2026-09-24T23:46:41.202236+00:00'

@@ -1,0 +1,8 @@
+role: system_architecture_multi_agent_design
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Always reference existing workspace architecture documentation before designing
+  new multi-agent flows to ensure consistency with established system patterns.
+last_updated: '2026-09-24T23:33:08.153471+00:00'

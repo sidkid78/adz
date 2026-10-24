@@ -1,0 +1,33 @@
+# downloads-drops-config.yaml
+# Production Configuration for organizing your local Downloads folder autonomously.
+# Replace paths like "~/Downloads" or "~/Documents" with your actual local home paths or relative paths.
+
+global_settings:
+  archive_dir: "~/Downloads/Processed_Archive"
+  outbox_dir: "~/Downloads/Agent_Outbox"
+  log_file: "~/Downloads/adz_watcher.log"
+
+drop_zones:
+  - name: "financial_sorter"
+    directory: "~/Downloads"
+    patterns: ["*statement*.csv", "*invoice*.csv", "*receipt*.pdf", "*billing*.csv"]
+    command: "python3 -c \"print('=== [FINANCES] SENSE & SORT ===\\nInbound statement detected: {file_name}\\nRouting file to ~/Documents/Finances/ and triggering data-cleanup scripts...')\""
+    color: "green"
+
+  - name: "reading_summarizer"
+    directory: "~/Downloads"
+    patterns: ["*.pdf", "*.epub"]
+    command: "claude -p \"You are a technical research partner. Read this newly downloaded paper, extract the core 5 bullet-point insights, list any actionable engineering strategies, and format it as an elegant Markdown memo.\" {file_path}"
+    color: "cyan"
+
+  - name: "code_cloner"
+    directory: "~/Downloads"
+    patterns: ["*.zip"]
+    command: "python3 -c \"print('=== [CODE STEWARD] ARCHIVE EXTRACTOR ===\\nUnpacking {file_name} into ~/Developer/Playground/\\nTriggering dependency validation and linting checks...')\""
+    color: "yellow"
+
+  - name: "media_compressor"
+    directory: "~/Downloads"
+    patterns: ["*.png", "*.jpg", "*.jpeg", "*.svg"]
+    command: "python3 -c \"print('=== [MEDIA WORKFLOW] PHOTO ARCHIVER ===\\nSorting image {file_name} to ~/Pictures/Downloads/ after checking for exif metadata...')\""
+    color: "magenta"

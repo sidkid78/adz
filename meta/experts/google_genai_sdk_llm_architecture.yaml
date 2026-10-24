@@ -1,0 +1,8 @@
+role: google_genai_sdk_llm_architecture
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Organize Gemini API logic into modular files (client, embeddings, interactions)
+  under `src/lib/gemini/` for clean separation of concerns.
+last_updated: '2026-10-23T20:39:07.597652+00:00'

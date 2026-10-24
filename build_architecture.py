@@ -53,9 +53,14 @@ from changesets import (
     SYSTEM_INSTRUCTION,
     ChangesetAgent,
     ChangesetError,
+    ModelUnavailable,
     contract_for_ticket,
+    deliverable_kind,
+    pregate_violation,
+    serves_root,
     specified_but_unowned,
     validate_changeset,
+    written_but_undeclared,
 )
 from cost import Ledger
 from dependencies import (
@@ -70,7 +75,9 @@ from greenfield import (
     PER_TICKET_GATE,
     TargetRepo,
     deno_check_cmd,
+    failed_migration,
     run_integration,
+    safe_console,
 )
 from import_architecture import build_order
 
@@ -149,6 +156,26 @@ def failure_fingerprint(transcript: str) -> frozenset[str]:
     return frozenset(out)
 
 
+def committed_tickets(repo: TargetRepo) -> set[str]:
+    """Ticket ids with a `feat(<id>):` commit — written only after the
+    ticket's gate passed, so a crashed run can resume past them."""
+    return set(re.findall(r"^[0-9a-f]+ feat\(([^)]+)\):", repo.log(limit=500), re.MULTILINE))
+
+
+def protected_paths(repo: TargetRepo, owners: dict[str, str], tid: str) -> dict[str, str]:
+    """Files ticket `tid` may not touch: the scaffold's, and every file the
+    plan assigns to another ticket — built yet or not. A ticket's own
+    required files stay writable even when the scaffold seeded them
+    (pm-mcp-server's mcp_init legitimately owns src/index.ts).
+
+    Anything else — new helpers, the ticket's own tests — stays open, so
+    this never refuses a file only this ticket has ever written."""
+    mine = {p for p, owner in owners.items() if owner == tid}
+    guarded = {p: "the scaffold" for p in repo.scaffold_paths() if p not in mine}
+    guarded.update({p: f"ticket {owner}" for p, owner in owners.items() if owner != tid})
+    return guarded
+
+
 def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str],
                  verbose: bool = False, log=None, layer: int = 0,
                  ledger: "Ledger | None" = None) -> tuple[bool, str]:
@@ -189,6 +216,7 @@ def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str
 
     last_failure = "agent produced no parseable files"
     seen_failures: list[frozenset[str]] = []
+    guarded = protected_paths(repo, owners, ticket["id"])
     for attempt in range(1, route["max_attempts"] + 1):
         attempt_started = _time.time()
         # The call that produced `files` has already happened — either
@@ -204,7 +232,18 @@ def build_ticket(repo: TargetRepo, ticket: dict, contract, owners: dict[str, str
             files = agent.repair(last_failure, contract)
             continue
 
-        written = repo.write_files(files)
+        # A refused write is a failed attempt the agent is told about, not a
+        # crash: write_files raising here used to take the whole run down.
+        try:
+            written = repo.write_files(files, protected=guarded)
+        except ValueError as refused:
+            last_failure = str(refused)
+            print(f"    attempt {attempt}: write refused ({refused})")
+            log.attempt_end(ticket["id"], attempt, "write_refused", detail=str(refused)[:300],
+                            duration=round(_time.time() - attempt_started, 2))
+            if attempt < route["max_attempts"]:
+                files = agent.repair(last_failure, contract)
+            continue
         ok, detail = validate_changeset(contract, repo, written)
         if ok:
             gate = repo.run_gate(contract.gate, log=log, ticket=ticket["id"])
@@ -284,6 +323,15 @@ def blame_tickets(failure: str, owners: dict[str, str]) -> list[str]:
     # that caused them. That path mirrors the source one, so rewriting it
     # back is what lets the failure reach the ticket that owns the route.
     normalised = normalised.replace(".next/types/app/", "src/app/")
+    # `next build` names ROUTES, not files: "Failed to collect page data
+    # for /api/boardroom/debate". With no path in the transcript, blame
+    # found nobody and a fixable failure stopped the run. Map each route
+    # it names back to the page/route file that serves it.
+    named_routes = set(re.findall(r"(?:data|configuration) for (/[\w\-/\[\]]*)", normalised))
+    if named_routes:
+        for path in owners:
+            if _route_of(path) in named_routes:
+                normalised += f"\n{path}"
     for path, owner in owners.items():
         if owner in blamed:
             continue
@@ -297,23 +345,115 @@ def blame_tickets(failure: str, owners: dict[str, str]) -> list[str]:
     return blamed
 
 
+def reachability_report(transcript: str) -> tuple[list[str], list[str]]:
+    """(orphaned files, entry points searched) from reachability.py's output."""
+    orphans = re.findall(r"UNREACHABLE\s+(\S+)", transcript)
+    block = transcript.split("Entry points searched:", 1)[-1] if "Entry points searched:" in transcript else ""
+    entries = []
+    for line in block.splitlines()[1:]:
+        if not line.strip():
+            break
+        entries.append(line.strip())
+    return orphans, entries
+
+
+def report_architecture_gap(transcript: str, owners: dict[str, str], log) -> None:
+    """Modules the build produced that no specified page or route uses.
+
+    Repairs used to "fix" this by inventing pages — a schema ticket's
+    repair wrote the home page, hiding six namespace imports in an array.
+    That is not a code defect a repair can honestly close: the architecture
+    never said where those modules are used. Say so, and name them, so the
+    next architecture can."""
+    orphans, _ = reachability_report(transcript)
+    if not orphans:
+        return
+    print(f"\n{'=' * 78}\nARCHITECTURE GAP — built, but no specified page or route uses it\n{'=' * 78}")
+    for path in orphans:
+        print(f"  {path}   (built by {owners.get(path, 'the scaffold')})")
+    print("  The architecture needs a page or route that calls each of these, or they\n"
+          "  should not be built. Add it to the orch2 prompt; the factory does not invent it.")
+    log.log(f"architecture gap: {len(orphans)} unreachable module(s): {', '.join(orphans)}",
+            level="warn")
+
+
+def unbuilt_routes(transcript: str, owners: dict[str, str]) -> list[str]:
+    """Routes the runtime proof got a 404 on that no ticket builds a page for.
+
+    That 404 is not a code defect: repairs may not create pages, and no
+    owned file serves the route, so there is nothing to blame. It used to
+    end in "no ticket owns a file named in the failure", which reads like a
+    factory bug rather than a missing page."""
+    served = {_route_of(p) for p in owners} - {None}
+    failing = re.findall(r"^\s*(/\S*) returned HTTP 404", transcript, re.MULTILINE)
+    return [r for r in dict.fromkeys(failing) if r not in served]
+
+
+def report_missing_routes(routes: list[str], owners: dict[str, str], log) -> None:
+    """The runtime-proof counterpart of report_architecture_gap."""
+    served = sorted({r for p in owners if (r := _route_of(p))})
+    print(f"\n{'=' * 78}\nARCHITECTURE GAP — requested, but no ticket builds a page for it\n{'=' * 78}")
+    for route in routes:
+        print(f"  {route}   -> 404")
+    print(f"  Routes this architecture does build: {', '.join(served) or 'none'}")
+    print("  Add a ticket that owns the page (src/app/page.tsx for `/`) to the orch2\n"
+          "  prompt; the factory does not invent pages.")
+    log.log(f"architecture gap: no page for {', '.join(routes)}", level="warn")
+
+
+def _route_of(path: str) -> str | None:
+    """The URL a src/app page or route file serves, or None. Route groups
+    `(x)` and slots `@x` are not part of the URL."""
+    m = re.match(r"src/app/(.*?)/?(?:page|route)\.tsx?$", path)
+    if not m:
+        return None
+    segments = [s for s in m.group(1).split("/") if s and not s.startswith(("(", "@"))]
+    return "/" + "/".join(segments)
+
+
 def repair_ticket(repo: TargetRepo, ticket: dict, contract, failure: str,
-                  max_attempts: int = 3) -> tuple[bool, str]:
+                  max_attempts: int = 3, log=None,
+                  ledger: "Ledger | None" = None,
+                  owners: dict[str, str] | None = None) -> tuple[bool, str, dict]:
     """Re-open a committed ticket to fix an integration failure.
 
     A fresh agent session, primed with the CURRENT contents of the files
     the ticket owns — the original session is gone, and the files have
     been committed since, so the repair prompt has to carry the code
     rather than assume the model remembers writing it.
+
+    Returns timing alongside the verdict. A 42-minute run once spent
+    about eleven minutes somewhere no event accounted for, and the repair
+    rounds were the only phase nothing timed. Model time and gate time
+    are split because they call for different fixes: slow model calls
+    argue for a cheaper repair tier, a slow gate for a narrower one.
     """
+    import time as _time
+    started = _time.time()
+    stats: dict = {"attempts": 0, "model_seconds": 0.0, "gate_seconds": 0.0}
     route = ROUTES.get(ticket.get("complexity", "medium"), ROUTES["medium"])
     agent = ChangesetAgent(model=route["model"], system_instruction=SYSTEM_INSTRUCTION)
+
+    def ask(call, *args):
+        t0 = _time.time()
+        out = call(*args)
+        stats["model_seconds"] += _time.time() - t0
+        if ledger is not None and getattr(agent, "last_usage", None):
+            ledger.record(ticket["id"], stats["attempts"] + 1, "integration_repair",
+                          agent.last_usage)
+        return out
+
+    def done(ok: bool, detail: str) -> tuple[bool, str, dict]:
+        stats["duration"] = _time.time() - started
+        return ok, detail, {k: round(v, 2) if isinstance(v, float) else v
+                            for k, v in stats.items()}
 
     current = "\n\n".join(
         f"--- {p} ---\n{repo.read_file(p)}"
         for p in contract.required_paths if repo.read_file(p) is not None
     )
-    files = agent._call(
+    files = ask(
+        agent._call,
         f"These files are already committed but the INTEGRATION gate rejects them:\n\n"
         f"```\n{failure[-5000:]}\n```\n\n"
         f"## Current contents\n{current}\n\n"
@@ -322,27 +462,41 @@ def repair_ticket(repo: TargetRepo, ticket: dict, contract, failure: str,
     )
 
     for attempt in range(1, max_attempts + 1):
+        stats["attempts"] = attempt
         if not files:
-            return False, "agent produced no parseable files"
+            return done(False, "agent produced no parseable files")
         # A repair fixes code the gate rejected. It does not get to mint
         # new tests: that is how an earlier one "fixed" reachability.
         try:
-            repo.write_files(files, allow_new_tests=False)
+            written = repo.write_files(files, allow_new_tests=False, allow_new_entry_points=False,
+                                       protected=protected_paths(repo, owners or {}, ticket["id"]))
         except ValueError as refused:
-            files = agent.repair(str(refused), contract)
+            files = ask(agent.repair, str(refused), contract)
             continue
-        gate = repo.run_gate(PER_TICKET_GATE)
+        # The checks a first build faces. Repairs skipped them, and a repair
+        # then shipped `as ComponentType<{}>` to render a component without
+        # its data — compiling, and crashing at prerender.
+        cheat = pregate_violation(repo, written)
+        if cheat:
+            repo.revert_uncommitted()
+            if attempt < max_attempts:
+                files = ask(agent.repair, cheat, contract)
+            continue
+        t0 = _time.time()
+        gate = repo.run_gate(PER_TICKET_GATE, log=log, ticket=f"{ticket['id']} (repair)")
+        stats["gate_seconds"] += _time.time() - t0
         if gate.passed:
             repo.commit(f"fix({ticket['id']}): satisfy integration gate")
-            return True, f"repaired on attempt {attempt}"
+            return done(True, f"repaired on attempt {attempt}")
         if attempt < max_attempts:
-            files = agent.repair(gate.transcript, contract)
+            files = ask(agent.repair, gate.transcript, contract)
 
     repo.revert_uncommitted()
-    return False, "repair exhausted its attempts"
+    return done(False, "repair exhausted its attempts")
 
 
 def main() -> int:
+    safe_console()
     ap = argparse.ArgumentParser(description="Build an orch2 technical architecture into a repo")
     ap.add_argument("architecture", type=Path, help="specs/<name>.architecture.json")
     ap.add_argument("--build", action="store_true", help="actually build (costs tokens)")
@@ -357,7 +511,13 @@ def main() -> int:
                     help="do not write factory_runs/<id>/events.jsonl")
     ap.add_argument("--integration-rounds", type=int, default=2,
                     help="how many times to repair-and-retry the integration gate")
+    ap.add_argument("--code-anyway", action="store_true",
+                    help="build even when no ticket names a file (a document architecture)")
+    ap.add_argument("--resume", action="store_true",
+                    help="skip tickets already committed in the target repo (after a crash)")
     args = ap.parse_args()
+    if args.resume and args.fresh:
+        ap.error("--resume keeps the existing repo; --fresh deletes it. Pick one.")
 
     arch = json.loads(args.architecture.read_text(encoding="utf-8"))
     tickets = {t["id"]: t for t in arch["tickets"]}
@@ -417,6 +577,36 @@ def main() -> int:
         if routes:
             print("           ^ these are ROUTES — without them the app has no "
                   "such pages, whatever else builds.")
+
+    # Trees are not the only place an architecture states a file. Workers
+    # write whole files in fences that the ticket's `files` list omits.
+    undeclared = written_but_undeclared(arch["tickets"], set(owners))
+    if undeclared:
+        pages = [(p, t) for p, t in undeclared if p.endswith(("page.tsx", "page.ts", "route.ts"))]
+        print(f"\nUNDECLARED: {len(undeclared)} file(s) written out in a ticket's code "
+              f"but in no ticket's file list")
+        for path, tid in (pages or undeclared)[:8]:
+            print(f"           {path}   (code in {tid})")
+        if pages:
+            print("           ^ these are ROUTES — written, and not going to be built.")
+
+    if not serves_root(set(owners)):
+        print("\nNO HOME  : no ticket builds src/app/page.tsx — the runtime proof will "
+              "fail on `/`\n           however clean everything else builds.")
+
+    # Said BEFORE anything spends tokens. A consulting engagement once
+    # planned as five buildable tickets, every path a fallback guess, and
+    # the plan printed "5 ticket(s) contracted" as if all was well.
+    kind, why = deliverable_kind(arch["tickets"])
+    if kind == "document":
+        source = arch.get("source") or "<orch2 execution>.json"
+        print(f"\nDOCUMENT : this is not a code architecture — {why}.")
+        print("           The deliverable is prose; build it with the document factory:")
+        print(f"           python run_factory.py {source} --build")
+        if args.build and not args.code_anyway:
+            print("REFUSING : --build on a document architecture "
+                  "(pass --code-anyway to override)")
+            return 1
 
     if args.plan or not args.build:
         print(f"\n{len(contracts)} ticket(s) contracted, "
@@ -519,6 +709,13 @@ def main() -> int:
 
     repo.branch(f"factory/{name}")
 
+    # A ticket counts as built when its own commit is in the repo — the
+    # commit only happens after its gate passed, so it is the evidence.
+    already_built = committed_tickets(repo) if args.resume else set()
+    if already_built:
+        print(f"resume   : {len(already_built)} ticket(s) already committed: "
+              f"{', '.join(sorted(already_built))}")
+
     # ---- Build in dependency order -----------------------------------
     passed, failed = [], []
     db_types_done = False
@@ -532,10 +729,20 @@ def main() -> int:
             if not contract:
                 continue
             ticket = tickets[tid]
+            if tid in already_built:
+                print(f"\n[{tid}] already committed — skipped (--resume)")
+                passed.append(tid)
+                continue
             print(f"\n[{tid}] {ticket['title']}")
             print(f"    files    : {', '.join(contract.required_paths)}")
-            ok, detail = build_ticket(repo, ticket, contract, owners, args.verbose,
-                                      log=log, layer=i, ledger=ledger)
+            try:
+                ok, detail = build_ticket(repo, ticket, contract, owners, args.verbose,
+                                          log=log, layer=i, ledger=ledger)
+            except ModelUnavailable as exc:
+                # The API failed, not the code: fail this ticket, keep the run.
+                repo.revert_uncommitted()
+                ok, detail = False, f"model API unavailable after retries (infrastructure): {exc}"
+                log.ticket_end(tid, False, 0, 0.0, detail[:300])
             ledger.settle(tid, ok)
             (passed if ok else failed).append(tid)
             print(f"    result   : {'PASSED' if ok else 'FAILED'} — {detail}")
@@ -554,6 +761,27 @@ def main() -> int:
         ):
             with log.timed("db types", phase="supabase gen types"):
                 started = repo.supabase_start()
+                # A migration that fails to apply is the schema ticket's bug,
+                # and every later ticket pays for it: with no generated
+                # Database type, rows resolve to `never` (28 errors in a
+                # ticket that did nothing wrong). Repair it NOW, then retry.
+                bad = failed_migration(started.transcript) if not started.passed else None
+                owner = owners.get(bad or "")
+                if bad and owner in contracts:
+                    print(f"db types : migration {bad} does not apply — repairing {owner}")
+                    try:
+                        ok, detail, stats = repair_ticket(
+                            repo, tickets[owner], contracts[owner], started.transcript,
+                            log=log, ledger=ledger, owners=owners)
+                    except ModelUnavailable as exc:
+                        repo.revert_uncommitted()
+                        ok, detail = False, f"model API unavailable (infrastructure): {exc}"
+                        stats = {"duration": 0.0, "model_seconds": 0.0,
+                                 "gate_seconds": 0.0, "attempts": 0}
+                    log.repair(owner, 0, ok, detail, **stats)
+                    print(f"    repair {owner}: {'OK' if ok else 'FAILED'} — {detail}")
+                    if ok:
+                        started = repo.supabase_start()
                 gen = repo.generate_db_types() if started.passed else started
             if gen.passed:
                 print(f"db types : OK — {gen.transcript}")
@@ -588,7 +816,22 @@ def main() -> int:
             print(f"    {integration.failed} failed after its retries; the code is unchanged.")
             print("    Re-run the integration gate once the environment is healthy.")
             break
-        blamed = blame_tickets(integration.transcript, owners)
+        if integration.failed == "reachability":
+            # Only a ticket that owns an existing page or route can make a
+            # module reachable honestly — by calling it. The orphan's own
+            # owner cannot touch those files, so repairing it only buys
+            # another cheat (one burned 314s trying).
+            _orphans, entries = reachability_report(integration.transcript)
+            blamed = sorted({owners[p] for p in entries if p in owners}
+                            & set(contracts))
+            if not blamed:
+                print("    no ticket owns a page or route that could use the orphaned modules")
+                break
+        elif integration.failed == "runtime proof" and unbuilt_routes(integration.transcript, owners):
+            print("    the failing route has no page in the architecture — nothing to repair")
+            break
+        else:
+            blamed = blame_tickets(integration.transcript, owners)
         if not blamed:
             print("    no ticket owns a file named in the failure — cannot auto-repair")
             print(integration.transcript[-2000:])
@@ -598,9 +841,18 @@ def main() -> int:
         for tid in blamed:
             if tid not in contracts:
                 continue
-            ok, detail = repair_ticket(repo, tickets[tid], contracts[tid], integration.transcript)
-            print(f"    repair {tid}: {'OK' if ok else 'FAILED'} — {detail}")
-            log.repair(tid, round_no, ok, detail)
+            try:
+                ok, detail, stats = repair_ticket(repo, tickets[tid], contracts[tid],
+                                                  integration.transcript, log=log, ledger=ledger,
+                                                  owners=owners)
+            except ModelUnavailable as exc:
+                repo.revert_uncommitted()
+                ok, detail = False, f"model API unavailable (infrastructure): {exc}"
+                stats = {"duration": 0.0, "model_seconds": 0.0, "gate_seconds": 0.0, "attempts": 0}
+            print(f"    repair {tid}: {'OK' if ok else 'FAILED'} — {detail} "
+                  f"({stats['duration']:.0f}s: model {stats['model_seconds']:.0f}s, "
+                  f"gate {stats['gate_seconds']:.0f}s, {stats['attempts']} attempt(s))")
+            log.repair(tid, round_no, ok, detail, **stats)
             if ok:
                 repairs.append(tid)
                 progressed = True
@@ -611,6 +863,12 @@ def main() -> int:
 
     if not integration.passed:
         print(integration.transcript[-2500:])
+    if not integration.passed and integration.failed == "reachability":
+        report_architecture_gap(integration.transcript, owners, log)
+    if not integration.passed and integration.failed == "runtime proof":
+        missing = unbuilt_routes(integration.transcript, owners)
+        if missing:
+            report_missing_routes(missing, owners, log)
 
     print(f"\n{'=' * 78}")
     print(f"BUILT    : {len(passed)}/{len(passed) + len(failed)} tickets — {', '.join(passed) or 'none'}")

@@ -1,0 +1,8 @@
+role: frontend_engineering_ui_ux
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Maintain strict TypeScript interfaces for all mock data in dashboard components
+  to prevent build errors during rapid UI development.
+last_updated: '2026-09-24T23:44:03.508336+00:00'

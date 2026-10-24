@@ -47,7 +47,7 @@ def generate_skill(need: str, skill_name: str, skills_dir: Path = SKILLS_DIR) ->
     )
     skill_dir = skills_dir / skill_name
     skill_dir.mkdir(parents=True, exist_ok=True)
-    (skill_dir / "SKILL.md").write_text(interaction.output_text.strip())
+    (skill_dir / "SKILL.md").write_text(interaction.output_text.strip(), encoding="utf-8", newline="\n")
     return skill_dir
 
 

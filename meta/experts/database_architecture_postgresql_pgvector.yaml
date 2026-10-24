@@ -1,0 +1,8 @@
+role: database_architecture_postgresql_pgvector
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Ensure Supabase migrations are fully executed and TypeScript types are generated
+  to maintain database schema synchronization.
+last_updated: '2026-09-26T07:10:46.665468+00:00'

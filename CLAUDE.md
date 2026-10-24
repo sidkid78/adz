@@ -151,6 +151,21 @@ Tailwind never installed, and no `dev` script. Every one typechecked, built and 
   and nothing imported them. "Is this module reachable from an entry point" is a question no
   compiler asks. It is the blind spot in first-writer-wins ownership — the DAG guarantees a
   ticket's dependencies *exist*, never that its output is *consumed*.
+  Repairs game it. After tests stopped counting as entry points, a repair wrote
+  `import * as X; void X` into a page, bare-imported pure modules from a route, and
+  `await import()`-ed them in `instrumentation.ts` — 286k tokens to make modules *look*
+  consumed. An import now counts only if a binding is really referenced, or (bare/discarded
+  dynamic import) the target has module-scope effects. When changing the check, re-run it over
+  every `factory_workspace/*` build: pm-mcp-server's self-registering tools must stay reachable.
+  **Stop patching cheats one pattern at a time; the incentive was the bug.** Repairs kept finding
+  new ways (namespaces in an array rendered as `{deps.length}` in a hidden div, whole invented
+  pages, `as ComponentType<{}>`) because the architecture gave the modules no page and the loop
+  demanded reachability anyway. So: repairs may not create new pages/routes/layouts
+  (`allow_new_entry_points=False`); reachability failures are repaired only by tickets that own
+  an existing entry point; what remains is printed as an **ARCHITECTURE GAP** for the human and
+  the next orch2 prompt; `import * as X` counts only if `X.member` is read; and repairs face the
+  same `pregate_violation()` checks as first builds (never-casts, prop-erasing casts,
+  non-function exports from `"use server"` files).
 - **Toolchain is the scaffold's job, never a ticket's.** `write_files` refuses `package.json`, so
   a ticket *cannot* add Tailwind, a run script or a tsconfig. Anything in that class belongs in
   `greenfield.py`. When generated code assumes a tool (the frontend expert role is literally
@@ -165,6 +180,15 @@ Tailwind never installed, and no `dev` script. Every one typechecked, built and 
   anything that only works because of accumulated workspace state (lockfile drift, gitignored
   files). Teardown uses `taskkill /T /F` on Windows — an orphaned dev server holding a port is
   how the next run fails mysteriously.
+- **Signed out, a login-gated app proves only its login page.** `signed_in_proof.py` (called
+  from `runtime_proof.py`) creates a throwaway user, seeds one row per table from PostgREST's
+  OpenAPI description, requests every static page with the `@supabase/ssr` session cookie, and
+  names the page's source file plus the server log on failure. It needs data, not just a
+  session: `rows.map(clientFn)` over an empty list never calls `clientFn`. It also needs the
+  Supabase env **at build time** — Next inlines `NEXT_PUBLIC_*` — so `supabase_start()` writes
+  `.env.local` (merged, gitignored) and `supabase db reset` runs *before* `next build`. Verified
+  by restoring the loogic dashboard's server-calls-client-function crash: the check fails on
+  `src/app/(dashboard)/page.tsx` with the real error.
 - **`visual_review.py` is the one model-checked step, and it is asymmetric.** A vision model reads
   the runtime-proof screenshot; a CRITICAL finding can fail an otherwise-green build, but its own
   "PASS" is discarded and recomputed from its findings, so it can never rescue a failed step.
@@ -323,6 +347,10 @@ fallbacks to work both ways. Match the file you are editing rather than normaliz
 declared in `pyproject.toml`. If you touch dependency handling, add them rather than assuming the
 manifest is complete.
 
+**`notes/` is early plans, not a spec.** The blueprints and `notes/code-examples/` were never
+verified and several contradict rules the code now enforces. Read them for intent only; don't
+port them into the factory as written. `notes/README.md` maps each to what replaced it.
+
 **Legacy duplicates.** Hyphenated files (`factory-router.py`, `adz-watcher.py`) are older,
 non-importable versions of the underscored modules (`factory_router.py`, `dropzone_watcher.py`).
 Edit the underscored ones.
@@ -331,6 +359,19 @@ Edit the underscored ones.
 which overwrites it. `test_target_code.py` + `check.sh` are the contract it must satisfy — don't edit
 the tests to make a run pass. Note it does **not** currently pass its own `check.sh` (ruff TRY004);
 that is pre-existing. `factory_router.py` no longer writes to it — builds run in a temp workspace.
+
+**Client material never gets committed.** The repo is public and the factory runs real client
+engagements. `drops/inbox/` (what a client sent) and `drops/outbox/` (what was delivered) are
+gitignored, and a local `.git/hooks/pre-commit` refuses any staged path under them, `git add -f`
+included. Don't bypass it with `--no-verify`. The same applies to imported architectures:
+`specs/*.architecture.json` is ignored and the hook refuses a newly added one; the four demo specs
+already tracked stay tracked.
+
+**Code vs. document is decided before anything builds.** `changesets.deliverable_kind()` calls an
+architecture a document job when no ticket names a single file — every path would come from
+`fallback_path()`. `architecture_watcher.py` routes those to `run_factory.py` (on the raw orch2
+execution, which is the format its intake reads), and `build_architecture.py --build` refuses them
+unless given `--code-anyway`. The rule is deliberately conservative: a mixed plan stays code.
 
 ## Config files
 

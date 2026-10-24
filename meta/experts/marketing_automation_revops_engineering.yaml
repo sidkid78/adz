@@ -1,0 +1,8 @@
+role: marketing_automation_revops_engineering
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Prioritize outputting complete technical implementation specifications without truncation
+  to ensure full architectural clarity for future runs.
+last_updated: '2026-09-24T03:36:21.783039+00:00'

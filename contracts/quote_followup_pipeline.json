@@ -1,0 +1,40 @@
+{
+  "slug": "quote_followup_pipeline",
+  "kind": "markdown_document",
+  "artifact_name": "ghl_quote_follow_up_engine",
+  "checks": [
+    {
+      "type": "required_sections",
+      "sections": [
+        "1. Conditional Logic Trees & Workflow Triggers",
+        "2. Detailed Multi-Channel Sequence Matrix (21-Day Cadence)",
+        "3. Automated Notification Rules (Escalation Engine)",
+        "4. Copy Templates Optimized for Field-Service Conversion"
+      ]
+    },
+    {
+      "type": "min_words",
+      "count": 500
+    },
+    {
+      "type": "min_table_rows",
+      "count": 8
+    },
+    {
+      "type": "regex_present",
+      "pattern": "objection_logged",
+      "description": "Must include the objection_logged exit condition tag"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "\\$7,500",
+      "description": "Must specify the high-value quote threshold"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "Twilio A2P 10DLC",
+      "description": "Must include the Twilio compliance implementation note"
+    }
+  ],
+  "test_code": null
+}

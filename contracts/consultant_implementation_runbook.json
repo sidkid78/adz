@@ -1,0 +1,51 @@
+{
+  "slug": "consultant_implementation_runbook",
+  "kind": "markdown_document",
+  "artifact_name": "digler_implementation_runbook",
+  "checks": [
+    {
+      "type": "required_sections",
+      "sections": [
+        "Strategic Governance Architecture",
+        "4-Day Implementation Sprint Runbook",
+        "Technician Standard Operating Procedures (SOP)",
+        "Executive Change Management & Governance Protocols"
+      ]
+    },
+    {
+      "type": "regex_present",
+      "pattern": "(?i)(Missed-?Call Text-?Back|MCTB)",
+      "description": "Must include the missed-call text-back deliverable"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "(?i)SaneBox",
+      "description": "Must include SaneBox for executive email triage"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "(?i)DashThis",
+      "description": "Must integrate DashThis for BI and dashboards"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "(?i)Automated Scheduling.*Prohibited|Scheduling Freeze",
+      "description": "Must strictly prohibit or freeze automated scheduling until historical data is stabilized"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "(?i)A2P 10DLC",
+      "description": "Must require carrier A2P 10DLC brand and campaign registration for Twilio"
+    },
+    {
+      "type": "regex_present",
+      "pattern": "\\$53,000",
+      "description": "Must state the target monthly revenue leakage being solved"
+    },
+    {
+      "type": "min_words",
+      "count": 1200
+    }
+  ],
+  "test_code": null
+}

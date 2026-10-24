@@ -1,0 +1,8 @@
+role: database_architecture_supabase_pgvector
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Always split schema definitions and RLS/vector functions into separate sequential
+  migration files with matching TypeScript types.
+last_updated: '2026-09-26T04:46:20.335135+00:00'

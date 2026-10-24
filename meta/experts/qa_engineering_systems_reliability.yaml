@@ -1,0 +1,8 @@
+role: qa_engineering_systems_reliability
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Always prioritize and ensure 100% pass rates on all P0 (Blocker) UAT tests for compliance
+  and revenue protection before production cutover.
+last_updated: '2026-09-24T03:44:24.819397+00:00'

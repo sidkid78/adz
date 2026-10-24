@@ -1,0 +1,8 @@
+role: llm_systems_engineering_google_genai_sdk
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Structure specialized agents with clear type definitions, dedicated clients, and
+  modular domain logic to build scalable multi-agent engines efficiently.
+last_updated: '2026-09-24T23:37:21.840453+00:00'

@@ -1,0 +1,8 @@
+role: react_tailwind_css_next_js_ui_engineering
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Maintain modular component separation and clear routing conventions when building
+  complex multi-view dashboard UIs like the adjuster portal.
+last_updated: '2026-10-23T21:21:50.566021+00:00'

@@ -34,12 +34,14 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 REPO_ROOT = Path(__file__).resolve().parent
 WORKSPACE_ROOT = REPO_ROOT / "factory_workspace"
@@ -93,9 +95,12 @@ PACKAGE_JSON = {
         "pregate": "npm run typecheck",
         "gate": "npm run test",
     },
+    # No fastmcp: it was here for the pm-mcp-server test build, and its
+    # optional jose@^5 peer conflicts with jose@6 elsewhere in the tree —
+    # `npm install` tolerates that, `npm ci` (clean install) refuses it.
+    # An architecture that imports it gets it from dependencies.py.
     "dependencies": {
         "@supabase/supabase-js": "^2.58.0",
-        "fastmcp": "^3.19.0",
         "next": "^16.3.5",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
@@ -222,8 +227,8 @@ import './globals.css';
 import type { ReactNode } from 'react';
 
 export const metadata = {
-  title: 'Project Management MCP',
-  description: 'Agentic project management dashboard',
+  title: '__APP_TITLE__',
+  description: 'Scaffolded by the ADZ factory from an orch2 technical architecture.',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -338,12 +343,65 @@ def _run(cmd: list[str], cwd: Path, timeout: int = 900) -> subprocess.CompletedP
     # printed but not propagated, and .stdout/.stderr came back None.
     # The symptom was a TypeError concatenating None, three frames away
     # from the real cause.
-    return subprocess.run(
+    #
+    # Popen + an explicit tree kill, NOT subprocess.run(timeout=...). On
+    # a timeout, run() kills the direct child — here cmd.exe, because of
+    # shell=True — and then waits for the pipes to close with NO timeout.
+    # docker.exe, a grandchild, still held them: a wedged WSL left a
+    # `docker ps` hanging a build for as long as anyone let it, its
+    # 60-second timeout having fired and done nothing.
+    proc = subprocess.Popen(
         subprocess.list2cmdline(cmd) if os.name == "nt" else cmd,
-        cwd=cwd, capture_output=True, timeout=timeout,
+        cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         text=True, encoding="utf-8", errors="replace",
-        check=False, shell=(os.name == "nt"),
+        shell=(os.name == "nt"), start_new_session=(os.name != "nt"),
+        # Decoded as utf-8 above, so ask Python children to ENCODE as
+        # utf-8 too. Piped, they default to cp1252 on Windows, and every
+        # em dash in reachability.py's advice reached the agent as U+FFFD.
+        env={**os.environ, "PYTHONIOENCODING": "utf-8"},
     )
+    try:
+        out, err = proc.communicate(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        _kill_tree(proc)
+        try:
+            out, err = proc.communicate(timeout=15)
+        except subprocess.TimeoutExpired:
+            # Something outside the tree still holds the pipes. Give up
+            # on the output rather than on the build.
+            out, err = "", ""
+        raise subprocess.TimeoutExpired(cmd, timeout, output=out, stderr=err) from None
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, err)
+
+
+def _run_infra(cmd: list[str], cwd: Path, timeout: int) -> subprocess.CompletedProcess:
+    """_run for docker and the supabase CLI: a timeout comes back as a
+    failed result instead of an exception, so every caller's existing
+    returncode check handles a wedged daemon. The "TIMEOUT after Ns"
+    wording matches INFRA_ERROR_PATTERNS, so the repair loop classifies
+    it as the environment's fault and blames no ticket."""
+    try:
+        return _run(cmd, cwd, timeout=timeout)
+    except subprocess.TimeoutExpired as exc:
+        return subprocess.CompletedProcess(
+            cmd, 124, exc.output or "",
+            f"TIMEOUT after {timeout}s: `{' '.join(cmd)}` did not answer — "
+            f"is Docker/WSL responding?\n{exc.stderr or ''}")
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    """Kill a process and everything it started. Same approach as
+    runtime_proof.py: taskkill /T on Windows, the process group elsewhere."""
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                           capture_output=True, check=False, timeout=30)
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    if proc.poll() is None:
+        proc.kill()
 
 
 class TargetRepo:
@@ -429,6 +487,10 @@ class TargetRepo:
         # runs, and merge the architecture's imports in before the single
         # install resolves the whole tree at once.
         package = json.loads(json.dumps(PACKAGE_JSON))
+        # Named for THIS repo. The template was written for pm-mcp-server,
+        # and every later build shipped as "pm-mcp-server" titled "Project
+        # Management MCP" — an insurance-claims app included.
+        package["name"] = self.name
         for name in extra_packages or []:
             package["dependencies"].setdefault(name, "latest")
         (self.path / "package.json").write_text(
@@ -453,10 +515,11 @@ class TargetRepo:
             # intended tree visible in the very first commit.
             (target / ".gitkeep").write_text("", encoding="utf-8")
 
+        title = " ".join(w.capitalize() for w in re.split(r"[-_]+", self.name) if w)
         for rel, content in SEED_FILES.items():
             path = self.path / rel
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8", newline="\n")
+            path.write_text(content.replace("__APP_TITLE__", title), encoding="utf-8", newline="\n")
 
         self.ensure_git()
 
@@ -620,8 +683,17 @@ class TargetRepo:
     # ---- writing changesets -----------------------------------------
     def write_files(self, files: dict[str, str],
                     allowed_roots: tuple[str, ...] | None = None,
-                    allow_new_tests: bool = True) -> list[str]:
+                    allow_new_tests: bool = True,
+                    allow_new_entry_points: bool = True,
+                    protected: dict[str, str] | None = None) -> list[str]:
         """Write a changeset, enforcing the boundary BEFORE touching disk.
+
+        `protected` maps path -> who owns it (the scaffold, or another
+        ticket). A changeset may not touch those. An integration repair
+        once rewrote the scaffold's root layout, deleting its globals.css
+        import to make room for a reachability cheat, and the whole app
+        rendered unstyled. Every gate passed; the scaffold had no owner to
+        object. See protected_paths() in build_architecture.py.
 
         Three separate refusals:
           - escaping the repo entirely (../../etc);
@@ -665,6 +737,22 @@ class TargetRepo:
                     f"refusing to write outside {roots}: {rel} "
                     f"(toolchain config defines what the gate means and is not a ticket's to change)"
                 )
+            if protected and normalised in protected:
+                raise ValueError(
+                    f"refusing to modify {rel}: it belongs to {protected[normalised]}. "
+                    f"Change only the files your ticket owns; if another module has to "
+                    f"import yours, that is its owner's change, not yours."
+                )
+            if not allow_new_entry_points and not target.exists() and ENTRY_POINT_RE.match(normalised):
+                # Repairs invented most of one app's pages — a schema
+                # ticket's repair wrote the home page — each existing only
+                # to import orphaned modules. A page nobody specified is an
+                # architecture gap, and it goes to a human.
+                raise ValueError(
+                    f"refusing to create a new entry point during a repair: {rel} "
+                    f"(a page, route or layout the architecture did not specify is a gap "
+                    f"to report, not something a repair invents to make a module reachable)"
+                )
             if (not allow_new_tests and normalised.startswith("tests/")
                     and not target.exists()):
                 raise ValueError(
@@ -680,6 +768,15 @@ class TargetRepo:
             target.write_text(content, encoding="utf-8", newline="\n")
             written.append(normalised)
         return written
+
+    def scaffold_paths(self) -> set[str]:
+        """Files the scaffold committed: the tree of the root commit."""
+        roots = _run(["git", "rev-list", "--max-parents=0", "HEAD"], self.path, timeout=60)
+        commits = (roots.stdout or "").split()
+        if roots.returncode != 0 or not commits:
+            return set()
+        tree = _run(["git", "ls-tree", "-r", "--name-only", commits[-1]], self.path, timeout=60)
+        return set((tree.stdout or "").splitlines())
 
     def read_file(self, rel: str) -> str | None:
         p = self.path / rel
@@ -711,7 +808,11 @@ class TargetRepo:
         netstat is not enough — it missed bindings that Docker reported,
         and the first two port ranges chosen from netstat output collided
         with already-running projects."""
-        proc = _run(["docker", "ps", "--format", "{{.Ports}}"], self.path, timeout=60)
+        proc = _run_infra(["docker", "ps", "--format", "{{.Ports}}"], self.path, timeout=60)
+        # A failed `docker ps` must not read as "nothing is running": the
+        # empty set would pick 54321, the block other projects occupy.
+        if proc.returncode != 0:
+            raise RuntimeError(f"cannot list Docker ports: {(proc.stderr or '').strip()[:300]}")
         return {
             int(m) for m in re.findall(r"0\.0\.0\.0:(\d+)", proc.stdout or "")
         }
@@ -735,11 +836,14 @@ class TargetRepo:
         """Create config.toml and move the stack off any occupied ports."""
         config = self.path / "supabase" / "config.toml"
         if not config.exists():
-            proc = _run(["supabase", "init", "--force", "--workdir", "."], self.path, timeout=180)
+            proc = _run_infra(["supabase", "init", "--force", "--workdir", "."], self.path, timeout=180)
             if not config.exists():
                 return GateResult(False, (proc.stdout or "") + (proc.stderr or ""), "supabase init")
 
-        base = self.allocate_supabase_ports()
+        try:
+            base = self.allocate_supabase_ports()
+        except RuntimeError as exc:
+            return GateResult(False, str(exc), "docker ps")
         text = config.read_text(encoding="utf-8")
         # Re-map every 54xxx port into the free block, preserving offsets
         # so api/db/studio keep their usual relative positions.
@@ -748,15 +852,51 @@ class TargetRepo:
             lambda m: f"{m.group(1)}{base // 100}{m.group(2)}",
             text,
         )
+        # Analytics runs Logflare plus a Vector log shipper — about 550MB
+        # together, the heaviest thing in the stack — and nothing the
+        # factory does reads them. On a machine that also hosts the
+        # developer's own projects, that memory went to swap compression.
+        remapped = re.sub(r"(\[analytics\][^\[]*?enabled\s*=\s*)true", r"\1false", remapped, count=1)
         config.write_text(remapped, encoding="utf-8", newline="\n")
         return GateResult(True, f"supabase configured on the {base}-block")
 
     def supabase_start(self) -> GateResult:
-        proc = _run(["supabase", "start"], self.path, timeout=1200)
+        proc = _run_infra(["supabase", "start"], self.path, timeout=1200)
         output = (proc.stdout or "") + (proc.stderr or "")
         if proc.returncode != 0:
             return GateResult(False, output[-3000:], "supabase start")
-        return GateResult(True, "supabase stack running")
+        wrote = self.write_supabase_env()
+        return GateResult(True, "supabase stack running" + (f"; {wrote}" if wrote else ""))
+
+    SUPABASE_ENV_KEYS: ClassVar[dict[str, str]] = {
+        "NEXT_PUBLIC_SUPABASE_URL": "API_URL",
+        "NEXT_PUBLIC_SUPABASE_ANON_KEY": "ANON_KEY",
+        "SUPABASE_SERVICE_ROLE_KEY": "SERVICE_ROLE_KEY",
+    }
+
+    def write_supabase_env(self) -> str:
+        """Point the app at its own local stack, in .env.local.
+
+        Next inlines NEXT_PUBLIC_* at BUILD time, so a build made without
+        them has `undefined` baked into every Supabase client: the server
+        can never recognise a session, and a login-gated app can only
+        ever redirect to its login page. Every generated app shipped that
+        way, which is also why no gate had ever rendered one signed in.
+
+        Merged, never overwritten: other keys a person added (an API key
+        for the app's own model calls) survive. .env.local is gitignored
+        by the scaffold, so none of this is committed."""
+        proc = _run_infra(["supabase", "status", "-o", "env"], self.path, timeout=120)
+        status = dict(re.findall(r'^([A-Z_]+)="?([^"\n]*)"?', proc.stdout or "", re.MULTILINE))
+        values = {key: status[src] for key, src in self.SUPABASE_ENV_KEYS.items() if status.get(src)}
+        if len(values) < len(self.SUPABASE_ENV_KEYS):
+            return ""
+        path = self.path / ".env.local"
+        lines = path.read_text(encoding="utf-8").splitlines() if path.exists() else []
+        kept = [ln for ln in lines if ln.split("=", 1)[0].strip() not in values]
+        path.write_text("\n".join([*kept, *(f"{k}={v}" for k, v in values.items())]) + "\n",
+                        encoding="utf-8", newline="\n")
+        return ".env.local points at the local stack"
 
     DB_TYPES_PATH = "src/lib/database.types.ts"
 
@@ -811,7 +951,7 @@ class TargetRepo:
         reset = _run(DB_RESET, self.path, timeout=900)
         reset_out = (reset.stdout or "") + (reset.stderr or "")
 
-        proc = _run(["supabase", "gen", "types", "typescript", "--local"],
+        proc = _run_infra(["supabase", "gen", "types", "typescript", "--local"],
                     self.path, timeout=300)
         types = proc.stdout or ""
         if proc.returncode != 0 or "export type Database" not in types:
@@ -838,11 +978,15 @@ class TargetRepo:
         tables = types.count("Relationships: [")
         return GateResult(True, f"{self.DB_TYPES_PATH}: {tables} table(s)")
 
-    def supabase_stop(self) -> None:
+    def supabase_stop(self, keep_data: bool = True) -> None:
         """Stop only THIS project's stack, by id. Never a bare
         `supabase stop`, which would take down every project running on
-        the machine."""
-        _run(["supabase", "stop", "--project-id", self.name], self.path, timeout=300)
+        the machine. keep_data=False also drops its volumes — only ever
+        this project's, and only its disposable local test database."""
+        cmd = ["supabase", "stop", "--project-id", self.name]
+        if not keep_data:
+            cmd.append("--no-backup")
+        _run_infra(cmd, self.path, timeout=300)
 
     # ---- the gate ----------------------------------------------------
     def run_gate(self, commands: list[list[str]], timeout: int = 600,
@@ -1060,7 +1204,7 @@ def _supabase_available(repo: "TargetRepo") -> tuple[bool, str]:
         return False, "supabase CLI not on PATH"
     if not _have("docker"):
         return False, "docker not on PATH"
-    proc = _run(["docker", "info"], repo.path, timeout=60)
+    proc = _run_infra(["docker", "info"], repo.path, timeout=60)
     if proc.returncode != 0:
         return False, "docker daemon not responding"
     if not (repo.path / "supabase" / "config.toml").exists():
@@ -1072,6 +1216,12 @@ INTEGRATION_STEPS = [
     Step("typecheck", TYPECHECK, lambda r: (True, "always"), timeout=600),
     Step("tests", TEST, lambda r: (True, "always"), timeout=600,
          assert_output=assert_tests_ran),
+    # Before `next build`, not last. Starting the stack writes the
+    # NEXT_PUBLIC_SUPABASE_* values into .env.local (write_supabase_env),
+    # and Next inlines them at build time; the runtime proof then renders
+    # pages signed in against the CURRENT schema. Run last, it left every
+    # build without a working Supabase client.
+    Step("supabase db reset", DB_RESET, _supabase_available, timeout=900, retries=2),
     Step("next build", NEXT_BUILD, _next_available, timeout=900),
     Step("route typegen", ROUTE_TYPEGEN, _next_available, timeout=600),
     # Supabase Edge Functions are Deno, not Node: they live outside
@@ -1111,7 +1261,6 @@ INTEGRATION_STEPS = [
     # for us and for nobody else. It found exactly that on its first
     # run: a lockfile out of sync with its own package.json.
     Step("clean install", CLEAN_INSTALL, _is_committed_repo, timeout=1800),
-    Step("supabase db reset", DB_RESET, _supabase_available, timeout=900, retries=2),
 ]
 
 
@@ -1158,6 +1307,44 @@ class IntegrationResult:
         return ", ".join(parts)
 
 
+# Files a framework or runtime loads by name — what reachability walks from.
+ENTRY_POINT_RE = re.compile(
+    r"^(?:src/app/(?:.+/)?(?:page|route|layout|template|loading|error|not-found|global-error|default)\.tsx?"
+    r"|(?:src/)?(?:middleware|instrumentation)\.ts"
+    r"|supabase/functions/[^/]+/index\.ts"
+    r"|src/scripts/.+\.ts)$")
+
+
+def safe_console() -> None:
+    """Never let printing a transcript kill a build.
+
+    Tool output is full of characters cp1252 cannot encode — `next build`
+    opens with "▲" — and a factory that crashes while REPORTING a failure
+    loses the report. Redirected output (the watcher's build logs) becomes
+    utf-8; an interactive console keeps its encoding but replaces what it
+    cannot show."""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream.isatty():
+                stream.reconfigure(errors="replace")
+            else:
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except (AttributeError, ValueError, OSError):
+            pass
+
+
+_MIGRATION_ERROR = re.compile(
+    r"Applying migration (\S+\.sql)\.\.\.(?:(?!Applying migration).)*?(?:MigrationApplyError|SQLSTATE|\bERROR:)",
+    re.DOTALL)
+
+
+def failed_migration(transcript: str) -> str | None:
+    """The migration a `supabase start`/`db reset` choked on, as a repo path
+    (so blame can find its owner) — or None when the failure was not SQL."""
+    m = _MIGRATION_ERROR.search(transcript or "")
+    return f"supabase/migrations/{m.group(1)}" if m else None
+
+
 def run_integration(repo: "TargetRepo", steps: list[Step] | None = None,
                     start_supabase: bool = True, log=None) -> IntegrationResult:
     """Run the integration steps, reporting skips as skips.
@@ -1185,6 +1372,18 @@ def run_integration(repo: "TargetRepo", steps: list[Step] | None = None,
         if step.name == "supabase db reset" and start_supabase:
             started = repo.supabase_start()
             transcript.append(f"== supabase start ==\n{started.transcript[-600:]}")
+            bad = failed_migration(started.transcript) if not started.passed else None
+            if bad:
+                # A migration that does not apply is the CODE failing, not
+                # the environment. Reported as a skip, it was invisible: a
+                # migration creating a function in the protected `auth`
+                # schema was "SKIPPED" twice, and the tickets after it wrote
+                # against a Database type that never got generated.
+                detail = f"MIGRATION FAILED: {bad}\n{started.transcript[-3000:]}"
+                if log:
+                    log.integration_step(step.name, "fail", 0.0, f"migration {bad}", detail)
+                return IntegrationResult(False, ran, skipped, f"{step.name} (migration)",
+                                         "\n".join([*transcript, detail]), infra=False)
             if not started.passed:
                 skipped.append((step.name, "supabase start failed"))
                 if log:
@@ -1204,6 +1403,28 @@ def run_integration(repo: "TargetRepo", steps: list[Step] | None = None,
             transcript.append(f"-- infra failure, retry {attempt + 1}/{step.retries} --")
             time.sleep(5)
             result = repo.run_gate([step.resolve(repo)], timeout=step.timeout)
+        # `supabase db reset` can fail on Supabase's OWN stack: Realtime
+        # re-runs its migrations while the database is recreated and dies
+        # on a duplicate schema_migrations row ("error running container:
+        # exit 1"), every time, on a correct schema. The question the step
+        # asks — do all migrations apply to an empty database — is answered
+        # just as well by dropping this project's volumes and starting
+        # fresh. A migration that fails THAT way is still the code's fault.
+        if (not result.passed and step.name == "supabase db reset"
+                and "error running container" in result.transcript
+                and not failed_migration(result.transcript)):
+            transcript.append("-- db reset hit a Supabase stack error; "
+                              "verifying with a clean stop + start instead --")
+            repo.supabase_stop(keep_data=False)
+            started = repo.supabase_start()
+            bad = failed_migration(started.transcript) if not started.passed else None
+            if started.passed:
+                result = GateResult(True, "clean start applied every migration to an empty "
+                                          "database (db reset itself failed inside Supabase)")
+            else:
+                result = GateResult(False, started.transcript
+                                    + (f"\nMIGRATION FAILED: {bad}" if bad else ""),
+                                    step.name)
         # Exit code 0 is necessary, not sufficient.
         if result.passed and step.assert_output:
             complaint = step.assert_output(result.transcript)
