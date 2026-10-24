@@ -34,3 +34,6 @@ specs/*.architecture.json
 # Run logs: they name the engagements built, and the repo is public.
 results.md
 results.html
+
+# Project-scoped MCP config: names our Supabase project, and the repo is public.
+.mcp.json
