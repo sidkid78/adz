@@ -1,0 +1,8 @@
+role: database_engineering_supabase
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Generate clean Supabase SQL migrations including relational tables, vector embeddings,
+  functions, and RLS policies in a single timestamped file.
+last_updated: '2026-09-24T23:38:12.161113+00:00'

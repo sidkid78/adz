@@ -57,7 +57,13 @@ if str(REPO_ROOT) not in sys.path:
 from watchdog.events import FileSystemEventHandler
 from watchdog.observers import Observer
 
-from changesets import ChangesetError, contract_for_ticket, deliverable_kind
+from changesets import (
+    ChangesetError,
+    contract_for_ticket,
+    deliverable_kind,
+    serves_root,
+    written_but_undeclared,
+)
 from import_architecture import IncompleteExport, build_order, load_architecture
 
 DEFAULT_WATCH_DIR = Path(
@@ -144,9 +150,9 @@ def wait_until_ready(path: Path, timeout: float = READY_TIMEOUT) -> dict | None:
     return None
 
 
-def contract_summary(arch: dict) -> tuple[int, int, list[str]]:
-    """(tickets with contracts, total files, ids without one) — the test
-    for whether this architecture is code work at all."""
+def contract_summary(arch: dict) -> tuple[int, int, list[str], set[str]]:
+    """(tickets with contracts, total files, ids without one, owned paths)
+    — the test for whether this architecture is code work at all."""
     by_id = {t["id"]: t for t in arch["tickets"]}
     owned: set[str] = set()
     contracted, files, missing = 0, 0, []
@@ -160,7 +166,7 @@ def contract_summary(arch: dict) -> tuple[int, int, list[str]]:
             owned |= set(c.required_paths)
             contracted += 1
             files += len(c.required_paths)
-    return contracted, files, missing
+    return contracted, files, missing, owned
 
 
 class ArchitectureHandler(FileSystemEventHandler):
@@ -223,7 +229,7 @@ class ArchitectureHandler(FileSystemEventHandler):
                 self.build_documents(path, name)
             return
 
-        contracted, files, missing = contract_summary(arch)
+        contracted, files, missing, owned = contract_summary(arch)
         if contracted == 0:
             record("skipped_not_code", file=path.name, tickets=len(tickets),
                    detail="no ticket yields a file contract; this is not a code architecture")
@@ -235,6 +241,16 @@ class ArchitectureHandler(FileSystemEventHandler):
         record("imported", file=path.name, spec=spec.name, name=name,
                tickets=len(tickets), contracted=contracted, files=files,
                no_contract=len(missing))
+
+        # Warned, not refused: everything else still builds and is worth
+        # having, but the run is known to fail its runtime proof, and the
+        # fix belongs in the orch2 prompt rather than in this factory.
+        undeclared = written_but_undeclared(tickets, owned)
+        if undeclared or not serves_root(owned):
+            record("plan_gap", name=name, no_home_page=not serves_root(owned),
+                   undeclared=[p for p, _ in undeclared][:20],
+                   detail="runtime proof will fail on /" if not serves_root(owned)
+                   else f"{len(undeclared)} file(s) written in code but in no file list")
 
         if self.args.plan_only:
             record("plan_only", name=name, detail="skipping build (--plan-only)")

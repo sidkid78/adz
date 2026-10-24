@@ -1,0 +1,8 @@
+role: advanced_rag_information_retrieval
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Implement modular RAG pipelines by separating structural parsing, intent classification,
+  and retrieval into dedicated library components.
+last_updated: '2026-10-23T20:56:23.067905+00:00'

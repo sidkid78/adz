@@ -1,0 +1,7 @@
+{
+  "model": "gemini-3.8-flash",
+  "thinking_level": "HIGH",
+  "workspace": ".",
+  "specs_dir": "./specs",
+  "max_iterations": 100
+}

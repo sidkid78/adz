@@ -1,0 +1,8 @@
+role: database_architecture_pgvector
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Always use timestamped migration files and generate corresponding TypeScript types
+  for Supabase schema and pgvector setups.
+last_updated: '2026-10-23T20:28:11.512520+00:00'

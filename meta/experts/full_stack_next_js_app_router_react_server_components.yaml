@@ -1,0 +1,8 @@
+role: full_stack_next_js_app_router_react_server_components
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Ensure dashboard treasuries and shareable audit reports are built within the correct
+  routing structures (`src/app/(dashboard)/treasury/` and `src/app/audit/[reportId]/`).
+last_updated: '2026-09-26T05:14:17.947285+00:00'

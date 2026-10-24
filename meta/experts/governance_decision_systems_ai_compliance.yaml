@@ -1,0 +1,8 @@
+role: governance_decision_systems_ai_compliance
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Implement STP confidence scoring, HITL gateways, and EU AI Act audit logs using
+  modular TypeScript types and dedicated library utilities.
+last_updated: '2026-10-23T21:00:48.834109+00:00'

@@ -1,0 +1,8 @@
+role: multimodal_vision_ai_insurance_claims
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Ensure all assessment types and core damage-assessor logic are fully implemented
+  and exported in their respective files.
+last_updated: '2026-10-23T20:44:55.596378+00:00'

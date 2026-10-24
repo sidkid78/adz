@@ -107,9 +107,11 @@ def normalize_path(path: str) -> str:
 # Many documents put the path in a header comment on the first line of
 # the code itself (`// src/types/dashboard.ts`) rather than in the prose
 # above it. That is the strongest ownership signal available: the file
-# is naming itself.
+# is naming itself. orch2 workers often label it (`// file: app/x/page.tsx`);
+# without the optional label that header was missed and the path fell back
+# to whatever the prose above mentioned last.
 _SELF_NAMING_RE = re.compile(
-    r"\A\s*(?://|--|/\*|#)\s*((?:" + _PATH_ROOTS + r")/[A-Za-z0-9_\-./\[\]]+\.(?:tsx|ts|sql))"
+    r"\A\s*(?://|--|/\*|#)\s*(?:file:\s*)?((?:" + _PATH_ROOTS + r")/[A-Za-z0-9_\-./\[\]]+\.(?:tsx|ts|sql))"
 )
 _FENCE_RE = re.compile(r"^```[a-zA-Z0-9_+-]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
 
@@ -295,6 +297,57 @@ def specified_but_unowned(tickets: list[dict], owned: set[str]) -> list[str]:
             if path not in drawn:
                 drawn.append(path)
     return [p for p in drawn if p not in owned]
+
+
+# src/app/page.tsx, or one nested only in route groups — `(marketing)` is
+# not part of the URL, so app/(marketing)/page.tsx is the site root too.
+_ROOT_PAGE_RE = re.compile(r"src/app/(?:\([^/]+\)/)*page\.tsx?$")
+
+
+def serves_root(owned: set[str]) -> bool:
+    """Whether any ticket builds the page that answers `/`.
+
+    runtime_proof.py requests `/` first. An architecture with no root page
+    builds clean through every static gate and then fails there — a
+    next-google-genai run spent 982k tokens to learn that, when the plan
+    already said so."""
+    return any(_ROOT_PAGE_RE.match(p) for p in owned)
+
+
+def self_named_paths(architecture: str) -> list[str]:
+    """Files a document writes out in full, by their own header comment.
+
+    Stricter than extract_owned_paths: only a fence that names itself,
+    never a path borrowed from the prose around it."""
+    found: list[str] = []
+    for body in _FENCE_RE.findall(architecture):
+        if len(body.strip()) < MIN_FENCE_CHARS:
+            continue
+        m = _SELF_NAMING_RE.match(body)
+        if m:
+            path = normalize_path(m.group(1))
+            if path.startswith(ALLOWED_ROOTS) and path not in found:
+                found.append(path)
+    return found
+
+
+def written_but_undeclared(tickets: list[dict], owned: set[str]) -> list[tuple[str, str]]:
+    """(path, ticket id) for code a ticket writes out that no ticket will build.
+
+    A ticket's `files` list is its plan; its fences are a worker's draft,
+    and the two drift. One architecture listed `retrieval-engine.ts` while
+    its own code wrote `retriever.ts`, and wrote the claim-submission page
+    in full while no `files` list named it — so the app shipped with no way
+    to submit a claim. Reported, not adopted: building the fences as well
+    would put two versions of the same module side by side."""
+    out: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for ticket in tickets:
+        for path in self_named_paths(ticket.get("architecture", "")):
+            if path not in owned and path not in seen:
+                seen.add(path)
+                out.append((path, ticket["id"]))
+    return out
 
 
 def named_paths(ticket: dict) -> list[str]:

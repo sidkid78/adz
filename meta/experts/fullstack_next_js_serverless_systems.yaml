@@ -1,0 +1,8 @@
+role: fullstack_next_js_serverless_systems
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Use the Next.js App Router for backend handlers and webhooks, placing them within
+  the `src/app/api` directory structure.
+last_updated: '2026-09-24T23:42:21.480085+00:00'

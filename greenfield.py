@@ -95,9 +95,12 @@ PACKAGE_JSON = {
         "pregate": "npm run typecheck",
         "gate": "npm run test",
     },
+    # No fastmcp: it was here for the pm-mcp-server test build, and its
+    # optional jose@^5 peer conflicts with jose@6 elsewhere in the tree —
+    # `npm install` tolerates that, `npm ci` (clean install) refuses it.
+    # An architecture that imports it gets it from dependencies.py.
     "dependencies": {
         "@supabase/supabase-js": "^2.58.0",
-        "fastmcp": "^3.19.0",
         "next": "^16.3.5",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
@@ -224,8 +227,8 @@ import './globals.css';
 import type { ReactNode } from 'react';
 
 export const metadata = {
-  title: 'Project Management MCP',
-  description: 'Agentic project management dashboard',
+  title: '__APP_TITLE__',
+  description: 'Scaffolded by the ADZ factory from an orch2 technical architecture.',
 };
 
 export default function RootLayout({ children }: { children: ReactNode }) {
@@ -484,6 +487,10 @@ class TargetRepo:
         # runs, and merge the architecture's imports in before the single
         # install resolves the whole tree at once.
         package = json.loads(json.dumps(PACKAGE_JSON))
+        # Named for THIS repo. The template was written for pm-mcp-server,
+        # and every later build shipped as "pm-mcp-server" titled "Project
+        # Management MCP" — an insurance-claims app included.
+        package["name"] = self.name
         for name in extra_packages or []:
             package["dependencies"].setdefault(name, "latest")
         (self.path / "package.json").write_text(
@@ -508,10 +515,11 @@ class TargetRepo:
             # intended tree visible in the very first commit.
             (target / ".gitkeep").write_text("", encoding="utf-8")
 
+        title = " ".join(w.capitalize() for w in re.split(r"[-_]+", self.name) if w)
         for rel, content in SEED_FILES.items():
             path = self.path / rel
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(content, encoding="utf-8", newline="\n")
+            path.write_text(content.replace("__APP_TITLE__", title), encoding="utf-8", newline="\n")
 
         self.ensure_git()
 

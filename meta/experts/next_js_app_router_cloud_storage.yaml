@@ -1,0 +1,8 @@
+role: next_js_app_router_cloud_storage
+total_runs: 1
+successes: 1
+failures: 0
+notes:
+- Build the claim intake pipeline and orchestrator with modular API routes and server
+  actions to ensure robust data flow.
+last_updated: '2026-10-23T21:13:34.739369+00:00'

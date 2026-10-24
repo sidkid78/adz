@@ -57,8 +57,10 @@ from changesets import (
     contract_for_ticket,
     deliverable_kind,
     pregate_violation,
+    serves_root,
     specified_but_unowned,
     validate_changeset,
+    written_but_undeclared,
 )
 from cost import Ledger
 from dependencies import (
@@ -375,6 +377,30 @@ def report_architecture_gap(transcript: str, owners: dict[str, str], log) -> Non
             level="warn")
 
 
+def unbuilt_routes(transcript: str, owners: dict[str, str]) -> list[str]:
+    """Routes the runtime proof got a 404 on that no ticket builds a page for.
+
+    That 404 is not a code defect: repairs may not create pages, and no
+    owned file serves the route, so there is nothing to blame. It used to
+    end in "no ticket owns a file named in the failure", which reads like a
+    factory bug rather than a missing page."""
+    served = {_route_of(p) for p in owners} - {None}
+    failing = re.findall(r"^\s*(/\S*) returned HTTP 404", transcript, re.MULTILINE)
+    return [r for r in dict.fromkeys(failing) if r not in served]
+
+
+def report_missing_routes(routes: list[str], owners: dict[str, str], log) -> None:
+    """The runtime-proof counterpart of report_architecture_gap."""
+    served = sorted({r for p in owners if (r := _route_of(p))})
+    print(f"\n{'=' * 78}\nARCHITECTURE GAP — requested, but no ticket builds a page for it\n{'=' * 78}")
+    for route in routes:
+        print(f"  {route}   -> 404")
+    print(f"  Routes this architecture does build: {', '.join(served) or 'none'}")
+    print("  Add a ticket that owns the page (src/app/page.tsx for `/`) to the orch2\n"
+          "  prompt; the factory does not invent pages.")
+    log.log(f"architecture gap: no page for {', '.join(routes)}", level="warn")
+
+
 def _route_of(path: str) -> str | None:
     """The URL a src/app page or route file serves, or None. Route groups
     `(x)` and slots `@x` are not part of the URL."""
@@ -551,6 +577,22 @@ def main() -> int:
         if routes:
             print("           ^ these are ROUTES — without them the app has no "
                   "such pages, whatever else builds.")
+
+    # Trees are not the only place an architecture states a file. Workers
+    # write whole files in fences that the ticket's `files` list omits.
+    undeclared = written_but_undeclared(arch["tickets"], set(owners))
+    if undeclared:
+        pages = [(p, t) for p, t in undeclared if p.endswith(("page.tsx", "page.ts", "route.ts"))]
+        print(f"\nUNDECLARED: {len(undeclared)} file(s) written out in a ticket's code "
+              f"but in no ticket's file list")
+        for path, tid in (pages or undeclared)[:8]:
+            print(f"           {path}   (code in {tid})")
+        if pages:
+            print("           ^ these are ROUTES — written, and not going to be built.")
+
+    if not serves_root(set(owners)):
+        print("\nNO HOME  : no ticket builds src/app/page.tsx — the runtime proof will "
+              "fail on `/`\n           however clean everything else builds.")
 
     # Said BEFORE anything spends tokens. A consulting engagement once
     # planned as five buildable tickets, every path a fallback guess, and
@@ -785,6 +827,9 @@ def main() -> int:
             if not blamed:
                 print("    no ticket owns a page or route that could use the orphaned modules")
                 break
+        elif integration.failed == "runtime proof" and unbuilt_routes(integration.transcript, owners):
+            print("    the failing route has no page in the architecture — nothing to repair")
+            break
         else:
             blamed = blame_tickets(integration.transcript, owners)
         if not blamed:
@@ -820,6 +865,10 @@ def main() -> int:
         print(integration.transcript[-2500:])
     if not integration.passed and integration.failed == "reachability":
         report_architecture_gap(integration.transcript, owners, log)
+    if not integration.passed and integration.failed == "runtime proof":
+        missing = unbuilt_routes(integration.transcript, owners)
+        if missing:
+            report_missing_routes(missing, owners, log)
 
     print(f"\n{'=' * 78}")
     print(f"BUILT    : {len(passed)}/{len(passed) + len(failed)} tickets — {', '.join(passed) or 'none'}")
